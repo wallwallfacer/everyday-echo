@@ -25,7 +25,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import java.time.LocalDate
 import java.time.LocalDateTime
 
@@ -71,8 +70,8 @@ class MonitoringService : Service() {
             onError = { _, _ -> /* silent — recognizer auto-restarts */ },
         ).also { it.start() }
 
-        val limitMs = getMaxHours() * 3600L * 1000L
         autoStopJob = scope.launch {
+            val limitMs = getMaxHours() * 3600L * 1000L
             delay(limitMs)
             stopMonitoring()
         }
@@ -166,8 +165,8 @@ class MonitoringService : Service() {
         getPrefs().edit().putBoolean(KEY_RUNNING, running).apply()
     }
 
-    private fun getMaxHours(): Int = runCatching {
-        runBlocking { repo.loadProfile().preferences.monitoringMaxHours }
+    private suspend fun getMaxHours(): Int = runCatching {
+        repo.loadProfile().preferences.monitoringMaxHours
     }.getOrDefault(16).coerceIn(1, 24)
 
     private fun getPrefs(): SharedPreferences =

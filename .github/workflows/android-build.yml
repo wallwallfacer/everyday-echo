@@ -1,0 +1,76 @@
+name: Android APK Build
+
+on:
+  push:
+    branches:
+      - "**"
+    paths:
+      - "android/**"
+      - ".github/workflows/android-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: android
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Build release APK
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Locate APKs
+        id: apk
+        run: |
+          DEBUG_APK=$(find app/build/outputs/apk/debug -name '*.apk' | head -n1)
+          RELEASE_APK=$(find app/build/outputs/apk/release -name '*.apk' | head -n1)
+          echo "Debug APK:   $DEBUG_APK"
+          echo "Release APK: $RELEASE_APK"
+          echo "debug=$DEBUG_APK" >> $GITHUB_OUTPUT
+          echo "release=$RELEASE_APK" >> $GITHUB_OUTPUT
+
+      - name: Upload APKs (workflow artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-keeper-apk
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create / update a rolling release with APKs
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-${{ github.ref_name }}
+          name: "Memory Keeper — latest from ${{ github.ref_name }}"
+          body: |
+            自动构建的 APK，来自分支 `${{ github.ref_name }}`，commit `${{ github.sha }}`。
+
+            直接用手机浏览器打开下方 `*-release.apk` 链接下载安装。
+            （首次安装会需要授权「来自此源的应用」。）
+          files: |
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/apk/debug/*.apk
+          fail_on_unmatched_files: true
+          prerelease: true

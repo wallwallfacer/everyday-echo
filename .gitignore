@@ -1,0 +1,22 @@
+# Gradle / Android
+.gradle/
+build/
+local.properties
+.cxx/
+captures/
+.externalNativeBuild/
+.kotlin/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keystore (we only use the shared debug keystore — never commit real ones)
+*.jks
+*.keystore
+!**/debug.keystore

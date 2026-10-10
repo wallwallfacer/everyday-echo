@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -15,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedButton
@@ -42,8 +45,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.everydayecho.memorykeeper.MemoryKeeperApp
+import com.everydayecho.memorykeeper.llm.LlmConfig
 import com.everydayecho.memorykeeper.llm.LlmProvider
+import com.everydayecho.memorykeeper.llm.createClient
 import kotlinx.coroutines.launch
+
+private data class TestResult(val ok: Boolean, val message: String)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,6 +69,8 @@ fun SettingsScreen(onBack: () -> Unit) {
         LlmProvider.entries.forEach { put(it, app.securePrefs.baseUrl(it)) }
     } }
     var providerMenu by remember { mutableStateOf(false) }
+    var testing by remember { mutableStateOf(false) }
+    var testResult by remember { mutableStateOf<TestResult?>(null) }
     var userMd by remember { mutableStateOf("") }
     var noGoTopics by remember { mutableStateOf("") }
     var enableEcho by remember { mutableStateOf(true) }
@@ -143,6 +152,51 @@ fun SettingsScreen(onBack: () -> Unit) {
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.secondary,
             )
+            OutlinedButton(
+                onClick = {
+                    val p = provider
+                    val cfg = LlmConfig(
+                        provider = p,
+                        apiKey = keys[p].orEmpty().trim(),
+                        model = models[p].orEmpty().trim().ifBlank { p.defaultModel },
+                        baseUrl = urls[p].orEmpty().trim().ifBlank { p.defaultBaseUrl },
+                    )
+                    testing = true
+                    testResult = null
+                    scope.launch {
+                        val start = System.nanoTime()
+                        val res = cfg.createClient().generate(
+                            system = "You are a connectivity test. Reply briefly.",
+                            userMessage = "请用一句话回复：连接成功。",
+                            maxTokens = 64,
+                            temperature = 0.0,
+                        )
+                        val ms = (System.nanoTime() - start) / 1_000_000
+                        testResult = res.fold(
+                            onSuccess = { TestResult(true, "${p.label} · ${cfg.model} · ${ms}ms\n回复：${it.take(300)}") },
+                            onFailure = { TestResult(false, it.message ?: it.javaClass.simpleName) },
+                        )
+                        testing = false
+                    }
+                },
+                enabled = !testing,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (testing) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text("测试中…")
+                } else {
+                    Text("测试连接（使用当前填写的内容，无需先保存）")
+                }
+            }
+            testResult?.let { r ->
+                Text(
+                    (if (r.ok) "✓ 测试通过\n" else "✗ 测试失败\n") + r.message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (r.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                )
+            }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
             SectionLabel("USER.md")

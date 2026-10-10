@@ -232,6 +232,19 @@ class FileRepository(private val context: Context) {
         File(lettersDir, "${date.format(DATE_FMT)}.md").delete()
     }
 
+    private fun transcribedMarker(date: LocalDate) = File(recordingsDir(date), ".transcribed")
+
+    /** Saved speech segments of [date] that have not been transcribed yet, oldest first. */
+    suspend fun pendingRecordings(date: LocalDate): List<File> = withContext(Dispatchers.IO) {
+        val m = transcribedMarker(date)
+        val done = if (m.exists()) m.readLines().toSet() else emptySet()
+        listRecordingFiles(date).filter { it.name !in done }
+    }
+
+    suspend fun markTranscribed(date: LocalDate, file: File) = withContext(Dispatchers.IO) {
+        transcribedMarker(date).appendText(file.name + "\n")
+    }
+
     /** Today's saved speech segments, oldest first. */
     suspend fun listRecordingFiles(date: LocalDate): List<File> = withContext(Dispatchers.IO) {
         recordingsDir(date).listFiles().orEmpty().filter { it.extension in AUDIO_EXT }.sortedBy { it.name }

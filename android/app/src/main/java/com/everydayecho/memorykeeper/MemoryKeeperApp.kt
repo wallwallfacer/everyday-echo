@@ -23,6 +23,7 @@ class MemoryKeeperApp : Application() {
         instance = this
         repository = FileRepository(this)
         securePrefs = SecurePreferences(this)
+        com.everydayecho.memorykeeper.transcribe.TranscribeWorker.schedule(this)
         appScope.launch(Dispatchers.IO) {
             repository.ensureSoul()
             repository.readMemory()

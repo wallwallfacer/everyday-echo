@@ -18,7 +18,7 @@ android {
 
         vectorDrawables { useSupportLibrary = true }
 
-        // Personal Samsung phone only: keeps ONNX Runtime native libs small.
+        // Personal Samsung phone only: keeps the sherpa-onnx native libs small.
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
@@ -99,7 +99,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.18.0")
+    implementation("org.apache.commons:commons-compress:1.26.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

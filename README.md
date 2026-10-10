@@ -65,8 +65,8 @@ MVP 严格忠于 spec 的「诚实而不是精致」原则。这一版有意做�
 
 ## 隐私 & 数据流（实现实况）
 
-- 监听时持续读麦克风，由本地开源 VAD（Silero VAD，MIT，ONNX Runtime）判断是否有人声，只把含人声的片段（前后各留 ~0.3 秒，停顿 < 1.5 秒合并）存成 AAC 文件（`data/audio/recordings/<日期>/HHmmss.aac`），静音/纯噪音直接丢弃；保留 7 天，可在「记忆 → 原始转录」页导出
-- 不做语音转文字。生成信件时，当天的语音片段（~15 分钟一组）上传到 Google Gemini（Files API）让模型直接听音频写信；需在「设置」选择 Gemini 并填 key。录音会离开手机，其他服务商无法处理音频
+- 监听时持续读麦克风，由本地开源 VAD（Silero VAD，经 sherpa-onnx）判断是否有人声，只把含人声的片段（前后各留 ~0.3 秒，停顿 < 1.5 秒合并，单段最长 30 秒）存成 AAC 文件（`data/audio/recordings/<日期>/HHmmss.aac`），静音/纯噪音直接丢弃；保留 7 天，可在「记忆 → 原始转录」页导出
+- 语音转文字完全在手机本地完成：开源模型 SenseVoice-Small（int8，约 160 MB，首次在「设置 → 本地语音转文字」里下载），通过 sherpa-onnx 运行。手机充电且空闲时自动批量转录，生成信件前也会补转剩余的片段。音频不上传，上云的只有转录后的文字
 - Onboarding 时的 voice fingerprint 录音 (`~/MemoryKeeper/data/audio/voice_self.m4a`) 暂作占位保存，未来用于声纹比对
 - Transcripts 本地存 7 天，逾期自动删（`FileRepository.pruneOldTranscripts`）
 - API Key 用 AES-256-GCM 加密存储（`EncryptedSharedPreferences`）
@@ -74,6 +74,16 @@ MVP 严格忠于 spec 的「诚实而不是精致」原则。这一版有意做�
 - 信件文本不回传给 Anthropic、不写入任何云端
 
 ---
+
+## 本地构建
+
+sherpa-onnx 的原生库不入库，本地构建前先运行一次 `scripts/fetch-sherpa-libs.sh`（CI 会自动执行）。
+
+## 第三方组件
+
+- sherpa-onnx（Apache-2.0）：`android/app/src/main/java/com/k2fsa/sherpa/onnx/` 为其 Kotlin API 源码原样拷贝
+- Silero VAD（MIT）
+- SenseVoice（FunASR Model License，个人使用）
 
 ## 构建要求
 

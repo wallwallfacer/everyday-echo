@@ -32,6 +32,10 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Fetch sherpa-onnx native libs
+        working-directory: .
+        run: ./scripts/fetch-sherpa-libs.sh
+
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
 

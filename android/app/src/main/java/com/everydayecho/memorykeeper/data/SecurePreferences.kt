@@ -4,10 +4,13 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.everydayecho.memorykeeper.llm.LlmConfig
+import com.everydayecho.memorykeeper.llm.LlmProvider
 
 /**
- * Tiny wrapper around EncryptedSharedPreferences for storing the
- * Anthropic API key locally. Keys never leave the device unencrypted.
+ * EncryptedSharedPreferences wrapper holding the active AI provider and a
+ * separate key / model / base URL per provider, so switching providers
+ * doesn't lose the others' settings.
  */
 class SecurePreferences(context: Context) {
 
@@ -24,23 +27,49 @@ class SecurePreferences(context: Context) {
         )
     }
 
-    var apiKey: String
-        get() = prefs.getString(KEY_API, "") ?: ""
+    var provider: LlmProvider
+        get() = LlmProvider.fromName(prefs.getString(KEY_PROVIDER, null))
         set(value) {
-            prefs.edit().putString(KEY_API, value).apply()
+            prefs.edit().putString(KEY_PROVIDER, value.name).apply()
         }
 
-    var apiModel: String
-        get() = prefs.getString(KEY_MODEL, DEFAULT_MODEL) ?: DEFAULT_MODEL
-        set(value) {
-            prefs.edit().putString(KEY_MODEL, value).apply()
-        }
+    fun apiKey(p: LlmProvider): String {
+        // Legacy (pre multi-provider) Anthropic key lived under "anthropic_api_key".
+        val legacy = if (p == LlmProvider.ANTHROPIC) prefs.getString("anthropic_api_key", "") else ""
+        return prefs.getString("key_${p.name}", null) ?: legacy.orEmpty()
+    }
 
-    fun hasApiKey(): Boolean = apiKey.isNotBlank()
+    fun setApiKey(p: LlmProvider, value: String) {
+        prefs.edit().putString("key_${p.name}", value).apply()
+    }
+
+    fun model(p: LlmProvider): String {
+        val legacy = if (p == LlmProvider.ANTHROPIC) prefs.getString("anthropic_model", null) else null
+        return prefs.getString("model_${p.name}", null) ?: legacy ?: p.defaultModel
+    }
+
+    fun setModel(p: LlmProvider, value: String) {
+        prefs.edit().putString("model_${p.name}", value).apply()
+    }
+
+    fun baseUrl(p: LlmProvider): String =
+        prefs.getString("url_${p.name}", null) ?: p.defaultBaseUrl
+
+    fun setBaseUrl(p: LlmProvider, value: String) {
+        prefs.edit().putString("url_${p.name}", value).apply()
+    }
+
+    fun activeConfig(): LlmConfig {
+        val p = provider
+        return LlmConfig(
+            provider = p,
+            apiKey = apiKey(p),
+            model = model(p).ifBlank { p.defaultModel },
+            baseUrl = baseUrl(p).ifBlank { p.defaultBaseUrl },
+        )
+    }
 
     companion object {
-        private const val KEY_API = "anthropic_api_key"
-        private const val KEY_MODEL = "anthropic_model"
-        const val DEFAULT_MODEL = "claude-opus-4-7"
+        private const val KEY_PROVIDER = "llm_provider"
     }
 }

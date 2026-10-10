@@ -164,13 +164,13 @@ class FileRepository(private val context: Context) {
     suspend fun listRecordingDays(): List<RecordingDay> = withContext(Dispatchers.IO) {
         File(audioDir, "recordings").listFiles().orEmpty().mapNotNull { d ->
             val date = runCatching { LocalDate.parse(d.name, DATE_FMT) }.getOrNull() ?: return@mapNotNull null
-            val fs = d.listFiles().orEmpty().filter { it.extension == "m4a" }
+            val fs = d.listFiles().orEmpty().filter { it.extension in AUDIO_EXT }
             if (fs.isEmpty()) null else RecordingDay(date, fs.size, fs.sumOf { it.length() })
         }.sortedByDescending { it.date }
     }
 
     suspend fun exportRecordings(date: LocalDate): File? = withContext(Dispatchers.IO) {
-        val files = recordingsDir(date).listFiles().orEmpty().filter { it.extension == "m4a" }.sortedBy { it.name }
+        val files = recordingsDir(date).listFiles().orEmpty().filter { it.extension in AUDIO_EXT }.sortedBy { it.name }
         if (files.isEmpty()) return@withContext null
         val dir = File(context.cacheDir, "exports").also { it.deleteRecursively(); it.mkdirs() }
         val zip = File(dir, "recordings-${date.format(DATE_FMT)}.zip")
@@ -232,7 +232,13 @@ class FileRepository(private val context: Context) {
         File(lettersDir, "${date.format(DATE_FMT)}.md").delete()
     }
 
+    /** Today's saved speech segments, oldest first. */
+    suspend fun listRecordingFiles(date: LocalDate): List<File> = withContext(Dispatchers.IO) {
+        recordingsDir(date).listFiles().orEmpty().filter { it.extension in AUDIO_EXT }.sortedBy { it.name }
+    }
+
     companion object {
+        private val AUDIO_EXT = setOf("aac", "m4a")
         private val DATE_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
         private val TIME_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
     }

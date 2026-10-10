@@ -65,7 +65,8 @@ MVP 严格忠于 spec 的「诚实而不是精致」原则。这一版有意做�
 
 ## 隐私 & 数据流（实现实况）
 
-- 监听时会把麦克风音频按 ~10 分钟一段保存为 m4a（`data/audio/recordings/<日期>/`），保留 7 天；可在「记忆 → 原始转录」页导出。语音转文字目前未启用（部分设备没有系统语音识别）
+- 监听时持续读麦克风，由本地开源 VAD（Silero VAD，MIT，ONNX Runtime）判断是否有人声，只把含人声的片段（前后各留 ~0.3 秒，停顿 < 1.5 秒合并）存成 AAC 文件（`data/audio/recordings/<日期>/HHmmss.aac`），静音/纯噪音直接丢弃；保留 7 天，可在「记忆 → 原始转录」页导出
+- 不做语音转文字。生成信件时，当天的语音片段（~15 分钟一组）上传到 Google Gemini（Files API）让模型直接听音频写信；需在「设置」选择 Gemini 并填 key。录音会离开手机，其他服务商无法处理音频
 - Onboarding 时的 voice fingerprint 录音 (`~/MemoryKeeper/data/audio/voice_self.m4a`) 暂作占位保存，未来用于声纹比对
 - Transcripts 本地存 7 天，逾期自动删（`FileRepository.pruneOldTranscripts`）
 - API Key 用 AES-256-GCM 加密存储（`EncryptedSharedPreferences`）

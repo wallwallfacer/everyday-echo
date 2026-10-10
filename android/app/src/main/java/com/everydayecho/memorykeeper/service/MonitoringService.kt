@@ -16,7 +16,7 @@ import androidx.core.app.NotificationCompat
 import com.everydayecho.memorykeeper.MainActivity
 import com.everydayecho.memorykeeper.R
 import com.everydayecho.memorykeeper.data.FileRepository
-import com.everydayecho.memorykeeper.record.ChunkedAudioRecorder
+import com.everydayecho.memorykeeper.record.SpeechSegmentRecorder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,7 +33,7 @@ import kotlinx.coroutines.launch
 class MonitoringService : Service() {
 
     private lateinit var repo: FileRepository
-    private var recorder: ChunkedAudioRecorder? = null
+    private var recorder: SpeechSegmentRecorder? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var startedAtMs: Long = 0
     private var autoStopJob: Job? = null
@@ -61,7 +61,7 @@ class MonitoringService : Service() {
         if (startedAtMs > 0) return
         startedAtMs = SystemClock.elapsedRealtime()
         startInForeground()
-        recorder = ChunkedAudioRecorder(
+        recorder = SpeechSegmentRecorder(
             context = this,
             dirFor = { repo.recordingsDir(it.toLocalDate()) },
             onStatus = { updateStatus(it) },

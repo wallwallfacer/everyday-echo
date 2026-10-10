@@ -27,6 +27,16 @@ class LetterGenerator(
         val memoryMd = trimMemoryForPrompt(repo.readMemory(), date)
         val transcript = sanitizeTranscript(repo.readTranscript(date), profile)
 
+        val audioFiles = repo.listRecordingFiles(date)
+        val config = prefs.activeConfig()
+        if (audioFiles.isNotEmpty() && config.provider != LlmProvider.GEMINI) {
+            return Result.failure(
+                IllegalStateException(
+                    "今天有 ${audioFiles.size} 段录音，但只有 Google Gemini 能直接听音频。请在「设置」里把 AI 服务切换为 Gemini 并填入 API key。",
+                ),
+            )
+        }
+
         val userMessage = buildString {
             appendLine("# USER.md")
             appendLine(userMd)
@@ -34,26 +44,65 @@ class LetterGenerator(
             appendLine("# MEMORY.md (近 14 天，已为今晚检索)")
             appendLine(memoryMd)
             appendLine()
-            appendLine("# 今日 transcript")
-            if (transcript.isBlank()) {
-                appendLine("（今日 transcript 为空）")
+            if (audioFiles.isNotEmpty()) {
+                appendLine("# 今日录音")
+                appendLine("下面会依次给出今天的录音（已由本地 VAD 去掉静音，只含有人声的片段，按时间顺序，每组前有开始时间）。")
+                appendLine("请直接听录音理解今天发生的事。")
+                if (profile.noGoTopics.isNotEmpty()) {
+                    appendLine("录音中若涉及这些禁区话题，请完全忽略、不要在信里提及：${profile.noGoTopics.joinToString(", ")}。")
+                }
+                appendLine("录音里可能有他人的声音或电视/视频声音，无法确定是用户本人说的内容请谨慎措辞。")
             } else {
-                appendLine(transcript)
+                appendLine("# 今日 transcript")
+                if (transcript.isBlank()) appendLine("（今日 transcript 为空）") else appendLine(transcript)
             }
-            appendLine()
+        }
+        val instruction = buildString {
             appendLine("---")
             appendLine("请按照档案员的规则，为 ${profile.preferredName.ifBlank { "用户" }} 生成今天 ${date} 的纪录。")
             appendLine("输出**只**包含信件正文，不要包含任何解释、Markdown 标题、metadata。")
-            appendLine("若 transcript 为空或全是噪音，按 SOUL.md 的「降级」规则诚实告知，不要凑字数。")
+            appendLine("若素材为空或全是噪音，按 SOUL.md 的「降级」规则诚实告知，不要凑字数。")
         }
 
-        val client = prefs.activeConfig().createClient()
-        return client.generate(
-            system = soul,
-            userMessage = userMessage,
-            maxTokens = 2048,
-            temperature = 0.7,
-        )
+        if (audioFiles.isEmpty()) {
+            return config.createClient().generate(
+                system = soul,
+                userMessage = userMessage + "\n" + instruction,
+                maxTokens = 2048,
+                temperature = 0.7,
+            )
+        }
+
+        val gemini = GeminiClient(config.apiKey, config.model, config.baseUrl)
+        val parts = mutableListOf<GeminiPart>(GeminiPart.Text(userMessage))
+        for ((idx, group) in groupByTime(audioFiles).withIndex()) {
+            val bytes = java.io.ByteArrayOutputStream().also { out -> group.forEach { out.write(it.readBytes()) } }.toByteArray()
+            val uri = gemini.uploadFile(bytes, "audio/aac", "${date}-${idx + 1}").getOrElse { return Result.failure(it) }
+            val times = group.joinToString(", ") { formatStart(it.nameWithoutExtension) }
+            parts += GeminiPart.Text("【录音第 ${idx + 1} 组，片段开始时间：$times】")
+            parts += GeminiPart.FileRef(uri, "audio/aac")
+        }
+        parts += GeminiPart.Text(instruction)
+        return gemini.generateParts(soul, parts, maxTokens = 2048, temperature = 0.7)
+    }
+
+    /** ADTS .aac files can be concatenated byte-for-byte; group ~15 min (≈3.6 MB at 32 kbps) per upload. */
+    private fun groupByTime(files: List<java.io.File>): List<List<java.io.File>> {
+        val groups = mutableListOf<MutableList<java.io.File>>()
+        var size = 0L
+        for (f in files) {
+            if (groups.isEmpty() || size + f.length() > GROUP_BYTES) { groups += mutableListOf(); size = 0 }
+            groups.last() += f
+            size += f.length()
+        }
+        return groups
+    }
+
+    private fun formatStart(hhmmss: String): String =
+        if (hhmmss.length == 6) "${hhmmss.substring(0, 2)}:${hhmmss.substring(2, 4)}:${hhmmss.substring(4)}" else hhmmss
+
+    private companion object {
+        const val GROUP_BYTES = 3_600_000L
     }
 
     private fun fillSlots(soul: String, p: UserProfile): String {

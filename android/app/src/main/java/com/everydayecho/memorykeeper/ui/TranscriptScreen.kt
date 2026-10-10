@@ -5,6 +5,8 @@ import android.content.Intent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -50,8 +52,13 @@ fun TranscriptScreen(onBack: () -> Unit) {
     var selected by remember { mutableStateOf<LocalDate?>(null) }
     var content by remember { mutableStateOf("") }
     var pendingExport by remember { mutableStateOf(false) }
+    var recDays by remember { mutableStateOf<List<com.everydayecho.memorykeeper.data.FileRepository.RecordingDay>>(emptyList()) }
+    var pendingRecDay by remember { mutableStateOf<LocalDate?>(null) }
 
-    LaunchedEffect(Unit) { dates = app.repository.listTranscriptDates() }
+    LaunchedEffect(Unit) {
+        dates = app.repository.listTranscriptDates()
+        recDays = app.repository.listRecordingDays()
+    }
     LaunchedEffect(selected) {
         content = selected?.let { app.repository.readTranscript(it) }.orEmpty()
     }
@@ -85,7 +92,7 @@ fun TranscriptScreen(onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    "监听识别出的文字，仅保留最近 7 天。不保存任何录音。",
+                    "监听识别出的文字，以及原始录音，仅保留最近 7 天。",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.secondary,
                 )
@@ -100,6 +107,29 @@ fun TranscriptScreen(onBack: () -> Unit) {
                             .clickable { selected = d }
                             .padding(vertical = 14.dp),
                     )
+                    HorizontalDivider()
+                }
+                Text(
+                    "原始录音",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(top = 20.dp),
+                )
+                if (recDays.isEmpty()) Text("（暂无录音）")
+                recDays.forEach { r ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(r.date.toString(), style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "${r.files} 段 · ${"%.1f".format(r.bytes / 1048576.0)} MB",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.secondary,
+                            )
+                        }
+                        TextButton(onClick = { pendingRecDay = r.date }) { Text("导出") }
+                    }
                     HorizontalDivider()
                 }
             }
@@ -121,6 +151,19 @@ fun TranscriptScreen(onBack: () -> Unit) {
         }
     }
 
+    pendingRecDay?.let { day ->
+        RecordingExportDialog(
+            day = day,
+            onDismiss = { pendingRecDay = null },
+            onConfirm = {
+                pendingRecDay = null
+                scope.launch {
+                    app.repository.exportRecordings(day)?.let { share(ctx, it, "application/zip") }
+                }
+            },
+        )
+    }
+
     if (pendingExport) {
         AlertDialog(
             onDismissRequest = { pendingExport = false },
@@ -138,6 +181,17 @@ fun TranscriptScreen(onBack: () -> Unit) {
             dismissButton = { TextButton(onClick = { pendingExport = false }) { Text("取消") } },
         )
     }
+}
+
+@Composable
+private fun RecordingExportDialog(day: LocalDate, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("导出 $day 的录音？") },
+        text = { Text("录音包含你和身边人的原始声音。分享出去后，文件不再受本 App 保护，请只发给你信任的地方。") },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("继续导出") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 private fun share(ctx: Context, file: java.io.File, mime: String) {

@@ -65,7 +65,7 @@ MVP 严格忠于 spec 的「诚实而不是精致」原则。这一版有意做�
 
 ## 隐私 & 数据流（实现实况）
 
-- 原始音频从未持久化：`SpeechRecognizer` 直接产生文本片段，没有 WAV 文件落盘
+- 监听时会把麦克风音频按 ~10 分钟一段保存为 m4a（`data/audio/recordings/<日期>/`），保留 7 天；可在「记忆 → 原始转录」页导出。语音转文字目前未启用（部分设备没有系统语音识别）
 - Onboarding 时的 voice fingerprint 录音 (`~/MemoryKeeper/data/audio/voice_self.m4a`) 暂作占位保存，未来用于声纹比对
 - Transcripts 本地存 7 天，逾期自动删（`FileRepository.pruneOldTranscripts`）
 - API Key 用 AES-256-GCM 加密存储（`EncryptedSharedPreferences`）

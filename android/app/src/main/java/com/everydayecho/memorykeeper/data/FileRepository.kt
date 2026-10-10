@@ -155,6 +155,44 @@ class FileRepository(private val context: Context) {
         }
     }
 
+    // ----- Raw recordings (data/audio/recordings/yyyy-MM-dd/HHmmss.m4a) -----
+    fun recordingsDir(date: LocalDate): File =
+        File(audioDir, "recordings/${date.format(DATE_FMT)}")
+
+    data class RecordingDay(val date: LocalDate, val files: Int, val bytes: Long)
+
+    suspend fun listRecordingDays(): List<RecordingDay> = withContext(Dispatchers.IO) {
+        File(audioDir, "recordings").listFiles().orEmpty().mapNotNull { d ->
+            val date = runCatching { LocalDate.parse(d.name, DATE_FMT) }.getOrNull() ?: return@mapNotNull null
+            val fs = d.listFiles().orEmpty().filter { it.extension == "m4a" }
+            if (fs.isEmpty()) null else RecordingDay(date, fs.size, fs.sumOf { it.length() })
+        }.sortedByDescending { it.date }
+    }
+
+    suspend fun exportRecordings(date: LocalDate): File? = withContext(Dispatchers.IO) {
+        val files = recordingsDir(date).listFiles().orEmpty().filter { it.extension == "m4a" }.sortedBy { it.name }
+        if (files.isEmpty()) return@withContext null
+        val dir = File(context.cacheDir, "exports").also { it.deleteRecursively(); it.mkdirs() }
+        val zip = File(dir, "recordings-${date.format(DATE_FMT)}.zip")
+        java.util.zip.ZipOutputStream(zip.outputStream()).use { out ->
+            out.setLevel(0)
+            files.forEach { f ->
+                out.putNextEntry(java.util.zip.ZipEntry(f.name))
+                f.inputStream().use { it.copyTo(out) }
+                out.closeEntry()
+            }
+        }
+        zip
+    }
+
+    suspend fun pruneOldRecordings(retentionDays: Int = 7) = withContext(Dispatchers.IO) {
+        val cutoff = LocalDate.now().minusDays(retentionDays.toLong())
+        File(audioDir, "recordings").listFiles()?.forEach { d ->
+            val date = runCatching { LocalDate.parse(d.name, DATE_FMT) }.getOrNull()
+            if (date != null && date.isBefore(cutoff)) d.deleteRecursively()
+        }
+    }
+
     suspend fun pruneOldTranscripts(retentionDays: Int = 7) = withContext(Dispatchers.IO) {
         val cutoff = LocalDate.now().minusDays(retentionDays.toLong())
         transcriptsDir.listFiles()?.forEach { f ->

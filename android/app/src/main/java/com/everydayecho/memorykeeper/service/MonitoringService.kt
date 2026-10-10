@@ -16,8 +16,7 @@ import androidx.core.app.NotificationCompat
 import com.everydayecho.memorykeeper.MainActivity
 import com.everydayecho.memorykeeper.R
 import com.everydayecho.memorykeeper.data.FileRepository
-import com.everydayecho.memorykeeper.data.TranscriptFragment
-import com.everydayecho.memorykeeper.transcribe.ContinuousSpeechRecognizer
+import com.everydayecho.memorykeeper.record.ChunkedAudioRecorder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -25,8 +24,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.time.LocalDate
-import java.time.LocalDateTime
 
 /**
  * Foreground service that runs while the user is awake-and-listening.
@@ -36,10 +33,9 @@ import java.time.LocalDateTime
 class MonitoringService : Service() {
 
     private lateinit var repo: FileRepository
-    private var recognizer: ContinuousSpeechRecognizer? = null
+    private var recorder: ChunkedAudioRecorder? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var startedAtMs: Long = 0
-    private var captured = 0
     private var autoStopJob: Job? = null
 
     override fun onCreate() {
@@ -65,14 +61,11 @@ class MonitoringService : Service() {
         if (startedAtMs > 0) return
         startedAtMs = SystemClock.elapsedRealtime()
         startInForeground()
-        recognizer = ContinuousSpeechRecognizer(
+        recorder = ChunkedAudioRecorder(
             context = this,
-            onFinal = { text ->
-                captured++
-                updateStatus("已捕获 $captured 段")
-                persistFragment(text)
-            },
-            onError = { _, msg -> updateStatus("识别出错：$msg（自动重试中）") },
+            dirFor = { repo.recordingsDir(it.toLocalDate()) },
+            onStatus = { updateStatus(it) },
+            onError = { updateStatus(it) },
         ).also { it.start() }
 
         autoStopJob = scope.launch {
@@ -84,8 +77,8 @@ class MonitoringService : Service() {
     }
 
     private fun stopMonitoring() {
-        recognizer?.stop()
-        recognizer = null
+        recorder?.stop()
+        recorder = null
         autoStopJob?.cancel()
         autoStopJob = null
         startedAtMs = 0
@@ -95,27 +88,13 @@ class MonitoringService : Service() {
     }
 
     override fun onDestroy() {
-        recognizer?.stop()
+        recorder?.stop()
         scope.cancel()
         setRunning(false)
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
-
-    private fun persistFragment(text: String) {
-        if (text.isBlank()) return
-        scope.launch {
-            repo.appendTranscript(
-                LocalDate.now(),
-                TranscriptFragment(
-                    timestamp = LocalDateTime.now(),
-                    text = text,
-                    speaker = "self?",
-                ),
-            )
-        }
-    }
 
     private fun buildNotification(text: String): Notification {
         val pi = PendingIntent.getActivity(

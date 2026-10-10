@@ -27,6 +27,7 @@ class MemoryKeeperApp : Application() {
             repository.ensureSoul()
             repository.readMemory()
             repository.pruneOldTranscripts()
+            repository.pruneOldRecordings()
         }
     }
 

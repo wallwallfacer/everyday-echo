@@ -8,7 +8,9 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 curl -fsSL --retry 3 -o "$TMP/a.tar.bz2" \
   "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${VERSION}/sherpa-onnx-v${VERSION}-android.tar.bz2"
-tar xjf "$TMP/a.tar.bz2" -C "$TMP" jniLibs/arm64-v8a/libonnxruntime.so jniLibs/arm64-v8a/libsherpa-onnx-jni.so
+tar xjf "$TMP/a.tar.bz2" -C "$TMP"
+SRC="$(dirname "$(find "$TMP" -path '*arm64-v8a/libsherpa-onnx-jni.so' | head -n1)")"
+[ -f "$SRC/libonnxruntime.so" ] || { echo "arm64-v8a libs not found in archive" >&2; exit 1; }
 mkdir -p "$DEST"
-cp "$TMP"/jniLibs/arm64-v8a/libonnxruntime.so "$TMP"/jniLibs/arm64-v8a/libsherpa-onnx-jni.so "$DEST/"
+cp "$SRC/libonnxruntime.so" "$SRC/libsherpa-onnx-jni.so" "$DEST/"
 ls -l "$DEST"

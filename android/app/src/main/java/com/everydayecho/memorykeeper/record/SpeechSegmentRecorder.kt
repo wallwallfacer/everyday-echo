@@ -111,9 +111,10 @@ class SpeechSegmentRecorder(
             while (!vad.empty()) {
                 val sg: SpeechSegment = vad.front()
                 vad.pop()
-                val pcm = cut(sg.start - PAD_SAMPLES, sg.start + sg.samples.size + PAD_SAMPLES)
+                val segStart = sg.start.toLong()
+                val pcm = cut(segStart - PAD_SAMPLES, segStart + sg.samples.size + PAD_SAMPLES)
                 if (pcm.isNotEmpty()) {
-                    submit(pcm, recStart.plusNanos(sg.start.toLong() * 1_000_000_000L / rate))
+                    submit(pcm, recStart.plusNanos(segStart * 1_000_000_000L / rate))
                 }
             }
         }

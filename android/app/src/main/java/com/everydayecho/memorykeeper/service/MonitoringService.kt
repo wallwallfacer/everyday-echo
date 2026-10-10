@@ -39,6 +39,7 @@ class MonitoringService : Service() {
     private var recognizer: ContinuousSpeechRecognizer? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var startedAtMs: Long = 0
+    private var captured = 0
     private var autoStopJob: Job? = null
 
     override fun onCreate() {
@@ -66,8 +67,12 @@ class MonitoringService : Service() {
         startInForeground()
         recognizer = ContinuousSpeechRecognizer(
             context = this,
-            onFinal = { text -> persistFragment(text) },
-            onError = { _, _ -> /* silent — recognizer auto-restarts */ },
+            onFinal = { text ->
+                captured++
+                updateStatus("已捕获 $captured 段")
+                persistFragment(text)
+            },
+            onError = { _, msg -> updateStatus("识别出错：$msg（自动重试中）") },
         ).also { it.start() }
 
         autoStopJob = scope.launch {
@@ -112,7 +117,7 @@ class MonitoringService : Service() {
         }
     }
 
-    private fun startInForeground() {
+    private fun buildNotification(text: String): Notification {
         val pi = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
@@ -122,10 +127,10 @@ class MonitoringService : Service() {
         val stopPi = PendingIntent.getService(
             this, 1, stopIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_listening)
             .setContentTitle(getString(R.string.notification_title))
-            .setContentText(getString(R.string.notification_text))
+            .setContentText(text)
             .setContentIntent(pi)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -133,6 +138,15 @@ class MonitoringService : Service() {
             .addAction(0, getString(R.string.notification_stop), stopPi)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
+    }
+
+    private fun updateStatus(text: String) {
+        if (startedAtMs == 0L) return
+        getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification(text))
+    }
+
+    private fun startInForeground() {
+        val notification = buildNotification(getString(R.string.notification_text))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIF_ID, notification,

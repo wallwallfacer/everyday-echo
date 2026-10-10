@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Memory Keeper</string>
+    <string name="notification_channel">监听状态</string>
+    <string name="notification_channel_desc">显示 Memory Keeper 正在监听</string>
+    <string name="notification_title">Memory Keeper 正在监听</string>
+    <string name="notification_text">轻点停止；超过 16 小时自动停。</string>
+    <string name="notification_stop">停止</string>
+</resources>

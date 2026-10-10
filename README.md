@@ -37,9 +37,10 @@ cd android
 
 1. 安装 APK，打开应用
 2. Onboarding：3 个问题 + 30 秒录音（约 2.5 分钟）
-3. 进入主屏后打开「设置」，把你的 Anthropic API Key（`sk-ant-...`）粘到 API Key 输入框
-   - Key 通过 `EncryptedSharedPreferences` 加密本地存储，永远只在调用 `api.anthropic.com` 时被读出
-   - 默认模型 `claude-opus-4-7`，可改
+3. 进入主屏后打开「设置」→「AI 服务」，选择服务商并填入 API Key
+   - 支持：Anthropic、OpenAI、DeepSeek、GLM（智谱）、OpenRouter，以及任意 OpenAI 兼容的自定义端点（需填 Base URL、模型 ID）
+   - 每个服务商各自保存 Key / 模型 / Base URL；默认模型可改
+   - Key 通过 `EncryptedSharedPreferences` 加密本地存储，只在调用所选服务商接口时被读出
 4. 回到主屏，开「正在监听」toggle（首次会弹麦克风权限）
 5. 当晚回来打开 app，点「现在生成今天的纪录」
 

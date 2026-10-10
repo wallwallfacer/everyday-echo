@@ -47,7 +47,7 @@ class LetterGenerator(
             appendLine("若 transcript 为空或全是噪音，按 SOUL.md 的「降级」规则诚实告知，不要凑字数。")
         }
 
-        val client = AnthropicClient(prefs.apiKey, prefs.apiModel)
+        val client = prefs.activeConfig().createClient()
         return client.generate(
             system = soul,
             userMessage = userMessage,

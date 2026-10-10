@@ -1,6 +1,7 @@
 package com.everydayecho.memorykeeper.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,6 +15,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -28,6 +32,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -37,7 +42,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.everydayecho.memorykeeper.MemoryKeeperApp
-import com.everydayecho.memorykeeper.data.SecurePreferences
+import com.everydayecho.memorykeeper.llm.LlmProvider
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -46,8 +51,17 @@ fun SettingsScreen(onBack: () -> Unit) {
     val app = MemoryKeeperApp.get()
     val scope = rememberCoroutineScope()
 
-    var apiKey by remember { mutableStateOf(app.securePrefs.apiKey) }
-    var apiModel by remember { mutableStateOf(app.securePrefs.apiModel) }
+    var provider by remember { mutableStateOf(app.securePrefs.provider) }
+    val keys = remember { mutableStateMapOf<LlmProvider, String>().apply {
+        LlmProvider.entries.forEach { put(it, app.securePrefs.apiKey(it)) }
+    } }
+    val models = remember { mutableStateMapOf<LlmProvider, String>().apply {
+        LlmProvider.entries.forEach { put(it, app.securePrefs.model(it)) }
+    } }
+    val urls = remember { mutableStateMapOf<LlmProvider, String>().apply {
+        LlmProvider.entries.forEach { put(it, app.securePrefs.baseUrl(it)) }
+    } }
+    var providerMenu by remember { mutableStateOf(false) }
     var userMd by remember { mutableStateOf("") }
     var noGoTopics by remember { mutableStateOf("") }
     var enableEcho by remember { mutableStateOf(true) }
@@ -86,24 +100,46 @@ fun SettingsScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Spacer(Modifier.height(4.dp))
-            SectionLabel("Anthropic API")
+            SectionLabel("AI 服务")
+            Box {
+                OutlinedButton(
+                    onClick = { providerMenu = true },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("服务商：${provider.label}") }
+                DropdownMenu(expanded = providerMenu, onDismissRequest = { providerMenu = false }) {
+                    LlmProvider.entries.forEach { p ->
+                        DropdownMenuItem(
+                            text = { Text(p.label) },
+                            onClick = { provider = p; providerMenu = false },
+                        )
+                    }
+                }
+            }
             OutlinedTextField(
-                value = apiKey,
-                onValueChange = { apiKey = it },
-                label = { Text("API Key (sk-ant-...)") },
+                value = keys[provider].orEmpty(),
+                onValueChange = { keys[provider] = it },
+                label = { Text("API Key (${provider.keyHint})") },
                 modifier = Modifier.fillMaxWidth(),
                 visualTransformation = PasswordVisualTransformation(),
                 singleLine = true,
             )
             OutlinedTextField(
-                value = apiModel,
-                onValueChange = { apiModel = it },
+                value = models[provider].orEmpty(),
+                onValueChange = { models[provider] = it },
                 label = { Text("模型 ID") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
+            OutlinedTextField(
+                value = urls[provider].orEmpty(),
+                onValueChange = { urls[provider] = it },
+                label = { Text(if (provider.editableBaseUrl) "Base URL（必填，如 https://host/v1）" else "Base URL（一般无需修改）") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
             Text(
-                "API Key 用 EncryptedSharedPreferences 加密存储，仅在调用 api.anthropic.com 时被读取。",
+                "每个服务商各自保存 Key / 模型 / Base URL，切换不会丢。Key 用 EncryptedSharedPreferences 加密存储，" +
+                    "只在调用所选服务商的接口时被读取。",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.secondary,
             )
@@ -152,8 +188,12 @@ fun SettingsScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             Button(
                 onClick = {
-                    app.securePrefs.apiKey = apiKey.trim()
-                    app.securePrefs.apiModel = apiModel.trim().ifBlank { SecurePreferences.DEFAULT_MODEL }
+                    app.securePrefs.provider = provider
+                    LlmProvider.entries.forEach { p ->
+                        app.securePrefs.setApiKey(p, keys[p].orEmpty().trim())
+                        app.securePrefs.setModel(p, models[p].orEmpty().trim().ifBlank { p.defaultModel })
+                        app.securePrefs.setBaseUrl(p, urls[p].orEmpty().trim().ifBlank { p.defaultBaseUrl })
+                    }
                     scope.launch {
                         val existing = app.repository.loadProfile()
                         val profile = existing.copy(

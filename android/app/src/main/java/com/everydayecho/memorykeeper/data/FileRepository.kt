@@ -127,6 +127,34 @@ class FileRepository(private val context: Context) {
         if (file.exists()) file.readText() else ""
     }
 
+    suspend fun listTranscriptDates(): List<LocalDate> = withContext(Dispatchers.IO) {
+        transcriptsDir.listFiles().orEmpty()
+            .mapNotNull { runCatching { LocalDate.parse(it.nameWithoutExtension, DATE_FMT) }.getOrNull() }
+            .sortedDescending()
+    }
+
+    /** Copies one day's transcript (or a zip of all days when [date] is null) to cache for sharing. */
+    suspend fun exportTranscripts(date: LocalDate?): File? = withContext(Dispatchers.IO) {
+        val dir = File(context.cacheDir, "exports").also { it.deleteRecursively(); it.mkdirs() }
+        if (date != null) {
+            val src = File(transcriptsDir, "${date.format(DATE_FMT)}.md")
+            if (!src.exists()) return@withContext null
+            File(dir, src.name).also { src.copyTo(it, overwrite = true) }
+        } else {
+            val files = transcriptsDir.listFiles().orEmpty().filter { it.extension == "md" }.sortedBy { it.name }
+            if (files.isEmpty()) return@withContext null
+            val zip = File(dir, "transcripts.zip")
+            java.util.zip.ZipOutputStream(zip.outputStream()).use { out ->
+                files.forEach { f ->
+                    out.putNextEntry(java.util.zip.ZipEntry(f.name))
+                    f.inputStream().use { it.copyTo(out) }
+                    out.closeEntry()
+                }
+            }
+            zip
+        }
+    }
+
     suspend fun pruneOldTranscripts(retentionDays: Int = 7) = withContext(Dispatchers.IO) {
         val cutoff = LocalDate.now().minusDays(retentionDays.toLong())
         transcriptsDir.listFiles()?.forEach { f ->

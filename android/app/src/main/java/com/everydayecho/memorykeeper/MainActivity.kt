@@ -13,6 +13,7 @@ import com.everydayecho.memorykeeper.ui.LetterScreen
 import com.everydayecho.memorykeeper.ui.MemoryScreen
 import com.everydayecho.memorykeeper.ui.OnboardingScreen
 import com.everydayecho.memorykeeper.ui.SettingsScreen
+import com.everydayecho.memorykeeper.ui.TranscriptScreen
 import com.everydayecho.memorykeeper.ui.theme.MemoryKeeperTheme
 
 class MainActivity : ComponentActivity() {
@@ -28,7 +29,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Screen { Loading, Onboarding, Letter, Settings, Memory }
+private enum class Screen { Loading, Onboarding, Letter, Settings, Memory, Transcripts }
 
 @androidx.compose.runtime.Composable
 private fun AppRoot() {
@@ -48,6 +49,10 @@ private fun AppRoot() {
             onOpenMemory = { screen = Screen.Memory },
         )
         Screen.Settings -> SettingsScreen(onBack = { screen = Screen.Letter })
-        Screen.Memory -> MemoryScreen(onBack = { screen = Screen.Letter })
+        Screen.Memory -> MemoryScreen(
+            onBack = { screen = Screen.Letter },
+            onOpenTranscripts = { screen = Screen.Transcripts },
+        )
+        Screen.Transcripts -> TranscriptScreen(onBack = { screen = Screen.Memory })
     }
 }

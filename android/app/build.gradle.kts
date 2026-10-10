@@ -19,14 +19,21 @@ android {
         vectorDrawables { useSupportLibrary = true }
     }
 
-    // We deliberately sign the release APK with AGP's default debug keystore.
-    // AGP auto-generates `~/.android/debug.keystore` on first build, so CI can
-    // produce installable APKs without managing a separate signing identity.
-    // Memory Keeper is a personal single-user app — fine for now. Swap in a
-    // proper release keystore before any public distribution.
+    // Fixed, committed keystore so every CI build is signed with the SAME key
+    // and APKs can be installed over each other. This is a personal single-user
+    // app sideloaded from GitHub Releases; do NOT reuse this for Play Store.
+    signingConfigs {
+        create("fixed") {
+            storeFile = file("memorykeeper.keystore")
+            storePassword = "memorykeeper"
+            keyAlias = "memorykeeper"
+            keyPassword = "memorykeeper"
+        }
+    }
 
     buildTypes {
         getByName("debug") {
+            signingConfig = signingConfigs.getByName("fixed")
             isMinifyEnabled = false
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
@@ -38,7 +45,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("fixed")
         }
     }
 

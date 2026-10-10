@@ -20,3 +20,4 @@ Thumbs.db
 *.jks
 *.keystore
 !**/debug.keystore
+!android/app/memorykeeper.keystore

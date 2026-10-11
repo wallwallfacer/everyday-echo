@@ -14,3 +14,9 @@ SRC="$(dirname "$(find "$TMP" -path '*arm64-v8a/libsherpa-onnx-jni.so' | head -n
 mkdir -p "$DEST"
 cp "$SRC/libonnxruntime.so" "$SRC/libsherpa-onnx-jni.so" "$DEST/"
 ls -l "$DEST"
+
+# Speaker-embedding model (3D-Speaker CAM++, zh-cn, Apache-2.0) for the "only my voice" filter.
+ASSETS="$(cd "$(dirname "$0")/.." && pwd)/android/app/src/main/assets"
+curl -fsSL --retry 3 -o "$ASSETS/speaker_campplus.onnx" \
+  "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx"
+ls -l "$ASSETS/speaker_campplus.onnx"

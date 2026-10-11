@@ -14,9 +14,15 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 /** Result of a batch run: [failed] segments crashed the recognizer and are skipped from now on. */
-data class TranscribeOutcome(val done: Int, val failed: Int = 0, val crashReason: String? = null) {
+data class TranscribeOutcome(
+    val done: Int,
+    val failed: Int = 0,
+    val crashReason: String? = null,
+    val removed: Int = 0,
+) {
     fun describe() = buildString {
         append("已转录 $done 段")
+        if (removed > 0) append("，其中 $removed 段没有人声，已删除")
         if (failed > 0) append("；$failed 段导致转录进程崩溃，已跳过（$crashReason）")
     }
 }
@@ -44,13 +50,14 @@ class Transcriber(private val context: Context, private val repo: FileRepository
                 var done = 0
                 var failed = 0
                 var reason: String? = null
+                var removed = 0
                 var remaining = work.map { it.second }
                 while (remaining.isNotEmpty()) {
                     val finished = HashSet<String>()
                     try {
                         RemoteAsr.run(context, remaining) { file, text ->
                             val date = dateOf.getValue(file.absolutePath)
-                            save(date, file, text)
+                            if (!save(date, file, text)) removed++
                             finished += file.absolutePath
                             done++
                             onProgress(done + failed, work.size)
@@ -68,7 +75,7 @@ class Transcriber(private val context: Context, private val repo: FileRepository
                     }
                 }
                 work.map { it.first }.distinct().forEach { repo.sortTranscript(it) }
-                TranscribeOutcome(done, failed, reason)
+                TranscribeOutcome(done, failed, reason, removed)
             }
         }
     }
@@ -95,7 +102,15 @@ class Transcriber(private val context: Context, private val repo: FileRepository
         }
     }
 
-    private suspend fun save(date: LocalDate, file: File, text: String?) {
+    /**
+     * Stores the result of one segment. A segment in which nothing was recognized has no voice
+     * worth keeping, so it is deleted; returns false in that case.
+     */
+    private suspend fun save(date: LocalDate, file: File, text: String?): Boolean {
+        if (text != null && !hasWords(text)) {
+            repo.deleteRecordings(date, listOf(file))
+            return false
+        }
         if (!text.isNullOrBlank()) {
             repo.appendTranscript(
                 date,
@@ -107,7 +122,11 @@ class Transcriber(private val context: Context, private val repo: FileRepository
             )
         }
         repo.markTranscribed(date, file)
+        return true
     }
+
+    /** False for empty or punctuation-only results, which SenseVoice gives for audio without speech. */
+    private fun hasWords(text: String) = text.any { it.isLetterOrDigit() }
 
     private fun loadCrash(e: AsrCrashException): Exception {
         recordCrash("加载模型时：" + e.reason)
@@ -126,7 +145,8 @@ class Transcriber(private val context: Context, private val repo: FileRepository
         runCatching { LocalTime.parse(name, DateTimeFormatter.ofPattern("HHmmss")) }.getOrDefault(LocalTime.MIDNIGHT)
 
     companion object {
-        private val lock = Mutex()
+        /** Serializes everything that reads or rewrites saved segments (transcription, cleanup). */
+        val lock = Mutex()
         private const val MAX_CRASHES = 3
         private val STAMP_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("MM-dd HH:mm")
 

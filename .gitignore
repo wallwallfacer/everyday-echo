@@ -24,3 +24,4 @@ Thumbs.db
 
 # sherpa-onnx native libs are fetched by scripts/fetch-sherpa-libs.sh (CI does this too)
 android/app/src/main/jniLibs/
+android/app/src/main/assets/speaker_campplus.onnx

@@ -203,6 +203,10 @@ fun SettingsScreen(onBack: () -> Unit) {
             TranscriptionSection()
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+            SectionLabel("我的声纹")
+            VoiceprintSection()
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
             SectionLabel("USER.md")
             Text(
                 "下面是当前的 USER.md。可以直接改，保存后下一封信生效。",

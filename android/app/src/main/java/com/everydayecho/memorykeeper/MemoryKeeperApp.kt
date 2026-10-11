@@ -30,6 +30,11 @@ class MemoryKeeperApp : Application() {
             repository.readMemory()
             repository.pruneOldTranscripts()
             repository.pruneOldRecordings()
+            // A voice sample from onboarding (or an interrupted update) without a computed voiceprint.
+            val vp = com.everydayecho.memorykeeper.voice.Voiceprint
+            if (!vp.isEnrolled(this@MemoryKeeperApp) && vp.samples(this@MemoryKeeperApp).isNotEmpty()) {
+                runCatching { vp.rebuild(this@MemoryKeeperApp) }
+            }
         }
     }
 

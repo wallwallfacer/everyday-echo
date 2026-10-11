@@ -5,6 +5,8 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
+import com.everydayecho.memorykeeper.voice.SpeakerFilter
+import com.everydayecho.memorykeeper.voice.Voiceprint
 import com.k2fsa.sherpa.onnx.SileroVadModelConfig
 import com.k2fsa.sherpa.onnx.SpeechSegment
 import com.k2fsa.sherpa.onnx.Vad
@@ -18,7 +20,9 @@ import java.util.concurrent.Executors
  * Listens to the microphone and runs a local VAD (Silero via sherpa-onnx) on the
  * stream. Only speech is kept: each utterance (pauses < 1.5 s merged, max 30 s,
  * ~0.3 s padding) is saved as its own AAC file under [dirFor]; silence and
- * noise-only stretches are dropped. Transcription happens later, in batch.
+ * noise-only stretches are dropped. If the user has a voiceprint, each utterance is
+ * further cut down to the stretches where the user is speaking ([SpeakerFilter]);
+ * other voices are never saved. Transcription happens later, in batch.
  */
 class SpeechSegmentRecorder(
     private val context: Context,
@@ -31,6 +35,11 @@ class SpeechSegmentRecorder(
     private val encoder = Executors.newSingleThreadExecutor()
     @Volatile private var savedSegments = 0
     @Volatile private var savedSeconds = 0L
+    @Volatile private var droppedSegments = 0
+
+    // Used only on the encoder thread.
+    private var filter: SpeakerFilter? = null
+    private var filterVersion: String? = null
 
     fun start() {
         if (running) return
@@ -41,6 +50,7 @@ class SpeechSegmentRecorder(
     fun stop() {
         running = false
         runCatching { thread?.join(3000) }
+        runCatching { encoder.execute { filter?.release(); filter = null } }
         encoder.shutdown()
     }
 
@@ -67,7 +77,7 @@ class SpeechSegmentRecorder(
                 VadModelConfig(
                     sileroVadModelConfig = SileroVadModelConfig(
                         model = "silero_vad.onnx",
-                        threshold = 0.5f,
+                        threshold = 0.6f,
                         minSilenceDuration = 1.5f,
                         minSpeechDuration = 0.5f,
                         windowSize = FRAME,
@@ -149,20 +159,51 @@ class SpeechSegmentRecorder(
     }
 
     private fun submit(pcm: ShortArray, start: LocalDateTime) {
-        val file = File(dirFor(start).also { it.mkdirs() }, "${start.format(FMT)}.aac")
         runCatching {
             encoder.execute {
-                try {
-                    AacEncoder.encode(pcm, file)
-                    savedSegments++
-                    savedSeconds += pcm.size / SAMPLE_RATE
-                    onStatus("监听中：已保存 $savedSegments 段有效语音（共 ${savedSeconds / 60} 分钟），待转录")
+                val pieces = try {
+                    userPieces(pcm, start)
                 } catch (t: Throwable) {
-                    Log.e(TAG, "encode failed", t)
-                    file.delete()
-                    onError("保存语音失败：${t.message}")
+                    Log.e(TAG, "speaker filter failed", t)
+                    listOf(pcm to start)
                 }
+                if (pieces.isEmpty()) droppedSegments++
+                for ((piece, at) in pieces) {
+                    val file = File(dirFor(at).also { it.mkdirs() }, "${at.format(FMT)}.aac")
+                    try {
+                        AacEncoder.encode(piece, file)
+                        savedSegments++
+                        savedSeconds += piece.size / SAMPLE_RATE
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "encode failed", t)
+                        file.delete()
+                        onError("保存语音失败：${t.message}")
+                    }
+                }
+                onStatus(
+                    buildString {
+                        append("监听中：已保存 $savedSegments 段有效语音（共 ${savedSeconds / 60} 分钟）")
+                        if (droppedSegments > 0) append("，已过滤 $droppedSegments 段非本人声音")
+                    },
+                )
             }
+        }
+    }
+
+    /** The parts of [pcm] spoken by the user (whole [pcm] if there is no voiceprint), with their start times. */
+    private fun userPieces(pcm: ShortArray, start: LocalDateTime): List<Pair<ShortArray, LocalDateTime>> {
+        val v = Voiceprint.version(context)
+        if (v != filterVersion) {
+            filter?.release()
+            filter = SpeakerFilter.create(context)
+            filterVersion = v
+        }
+        val f = filter ?: return listOf(pcm to start)
+        val x = FloatArray(pcm.size) { pcm[it] / 32768f }
+        return f.userRegions(x).map { r ->
+            val a = maxOf(0, r.first - KEEP_PAD)
+            val b = minOf(pcm.size, r.last + 1 + KEEP_PAD)
+            pcm.copyOfRange(a, b) to start.plusNanos(a * 1_000_000_000L / SAMPLE_RATE)
         }
     }
 
@@ -171,6 +212,7 @@ class SpeechSegmentRecorder(
         private const val SAMPLE_RATE = 16000
         private const val FRAME = 512
         private const val PAD_SAMPLES = 4800        // 0.3 s
+        private const val KEEP_PAD = 3200           // 0.2 s around kept speaker regions
         private const val RING_FRAMES = 1900        // ~60 s of history (segments are <= 30 s)
         private val FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("HHmmss")
     }

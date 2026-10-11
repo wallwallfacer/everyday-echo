@@ -282,6 +282,26 @@ class FileRepository(private val context: Context) {
         transcribedMarker(date).appendText(file.name + "\n")
     }
 
+    /**
+     * Deletes saved segments of [date] together with their transcript lines and bookkeeping.
+     * Transcript lines are matched by the segment's start time (its file name, HHmmss).
+     */
+    suspend fun deleteRecordings(date: LocalDate, files: Collection<File>) = withContext(Dispatchers.IO) {
+        if (files.isEmpty()) return@withContext
+        val names = files.map { it.name }.toSet()
+        val times = files.map { it.nameWithoutExtension }.filter { it.length == 6 }
+            .map { "[${it.substring(0, 2)}:${it.substring(2, 4)}:${it.substring(4)}]" }.toSet()
+        files.forEach { it.delete() }
+        val t = File(transcriptsDir, "${date.format(DATE_FMT)}.md")
+        if (t.exists() && times.isNotEmpty()) {
+            val kept = t.readLines().filterNot { line -> line.startsWith("- [") && times.any { line.startsWith("- $it") } }
+            t.writeText(kept.joinToString("\n").trimEnd() + "\n")
+        }
+        for (m in listOf(transcribedMarker(date), failedMarker(date))) {
+            if (m.exists()) m.writeText(m.readLines().filter { it.isNotBlank() && it !in names }.joinToString("") { it + "\n" })
+        }
+    }
+
     /** Today's saved speech segments, oldest first. */
     suspend fun listRecordingFiles(date: LocalDate): List<File> = withContext(Dispatchers.IO) {
         recordingsDir(date).listFiles().orEmpty().filter { it.extension in AUDIO_EXT }.sortedBy { it.name }

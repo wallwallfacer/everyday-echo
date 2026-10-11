@@ -127,6 +127,97 @@ class FileRepository(private val context: Context) {
         if (file.exists()) file.readText() else ""
     }
 
+    suspend fun listTranscriptDates(): List<LocalDate> = withContext(Dispatchers.IO) {
+        transcriptsDir.listFiles().orEmpty()
+            .mapNotNull { runCatching { LocalDate.parse(it.nameWithoutExtension, DATE_FMT) }.getOrNull() }
+            .sortedDescending()
+    }
+
+    /** Copies one day's transcript (or a zip of all days when [date] is null) to cache for sharing. */
+    suspend fun exportTranscripts(date: LocalDate?): File? = withContext(Dispatchers.IO) {
+        val dir = File(context.cacheDir, "exports").also { it.deleteRecursively(); it.mkdirs() }
+        if (date != null) {
+            val src = File(transcriptsDir, "${date.format(DATE_FMT)}.md")
+            if (!src.exists()) return@withContext null
+            File(dir, src.name).also { src.copyTo(it, overwrite = true) }
+        } else {
+            val files = transcriptsDir.listFiles().orEmpty().filter { it.extension == "md" }.sortedBy { it.name }
+            if (files.isEmpty()) return@withContext null
+            val zip = File(dir, "transcripts.zip")
+            java.util.zip.ZipOutputStream(zip.outputStream()).use { out ->
+                files.forEach { f ->
+                    out.putNextEntry(java.util.zip.ZipEntry(f.name))
+                    f.inputStream().use { it.copyTo(out) }
+                    out.closeEntry()
+                }
+            }
+            zip
+        }
+    }
+
+    // ----- Raw recordings (data/audio/recordings/yyyy-MM-dd/HHmmss.m4a) -----
+    fun recordingsDir(date: LocalDate): File =
+        File(audioDir, "recordings/${date.format(DATE_FMT)}")
+
+    data class RecordingDay(val date: LocalDate, val files: Int, val bytes: Long)
+
+    suspend fun listRecordingDays(): List<RecordingDay> = withContext(Dispatchers.IO) {
+        File(audioDir, "recordings").listFiles().orEmpty().mapNotNull { d ->
+            val date = runCatching { LocalDate.parse(d.name, DATE_FMT) }.getOrNull() ?: return@mapNotNull null
+            val fs = d.listFiles().orEmpty().filter { it.extension in AUDIO_EXT }
+            if (fs.isEmpty()) null else RecordingDay(date, fs.size, fs.sumOf { it.length() })
+        }.sortedByDescending { it.date }
+    }
+
+    suspend fun exportRecordings(date: LocalDate): File? = withContext(Dispatchers.IO) {
+        val files = recordingsDir(date).listFiles().orEmpty().filter { it.extension in AUDIO_EXT }.sortedBy { it.name }
+        if (files.isEmpty()) return@withContext null
+        val dir = File(context.cacheDir, "exports").also { it.deleteRecursively(); it.mkdirs() }
+        val zip = File(dir, "recordings-${date.format(DATE_FMT)}.zip")
+        java.util.zip.ZipOutputStream(zip.outputStream()).use { out ->
+            out.setLevel(0)
+            files.forEach { f ->
+                out.putNextEntry(java.util.zip.ZipEntry(f.name))
+                f.inputStream().use { it.copyTo(out) }
+                out.closeEntry()
+            }
+        }
+        zip
+    }
+
+    suspend fun pruneOldRecordings(retentionDays: Int = 7) = withContext(Dispatchers.IO) {
+        val cutoff = LocalDate.now().minusDays(retentionDays.toLong())
+        File(audioDir, "recordings").listFiles()?.forEach { d ->
+            val date = runCatching { LocalDate.parse(d.name, DATE_FMT) }.getOrNull()
+            if (date != null && date.isBefore(cutoff)) d.deleteRecursively()
+        }
+    }
+
+    /** Segment transcripts of [date], keyed by the segment file stem (HHmmss). Only lines with seconds match. */
+    suspend fun segmentTranscripts(date: LocalDate): Map<String, String> = withContext(Dispatchers.IO) {
+        val file = File(transcriptsDir, "${date.format(DATE_FMT)}.md")
+        if (!file.exists()) return@withContext emptyMap()
+        val re = Regex("""^- \[(\d\d):(\d\d):(\d\d)] \([^)]*\) (.*)$""")
+        file.readLines().mapNotNull { line ->
+            re.find(line)?.let { m -> (m.groupValues[1] + m.groupValues[2] + m.groupValues[3]) to m.groupValues[4] }
+        }.toMap()
+    }
+
+    suspend fun transcribedNames(date: LocalDate): Set<String> = withContext(Dispatchers.IO) {
+        val m = transcribedMarker(date)
+        if (m.exists()) m.readLines().toSet() else emptySet()
+    }
+
+    /** Keeps a day's transcript in time order after out-of-order (manual) transcription. */
+    suspend fun sortTranscript(date: LocalDate) = withContext(Dispatchers.IO) {
+        val file = File(transcriptsDir, "${date.format(DATE_FMT)}.md")
+        if (!file.exists()) return@withContext
+        val lines = file.readLines()
+        val (entries, header) = lines.partition { it.startsWith("- [") }
+        val sorted = entries.sortedBy { it.substringAfter("[").substringBefore("]") }
+        file.writeText((header.joinToString("\n").trimEnd() + "\n\n" + sorted.joinToString("\n") + "\n"))
+    }
+
     suspend fun pruneOldTranscripts(retentionDays: Int = 7) = withContext(Dispatchers.IO) {
         val cutoff = LocalDate.now().minusDays(retentionDays.toLong())
         transcriptsDir.listFiles()?.forEach { f ->
@@ -166,9 +257,28 @@ class FileRepository(private val context: Context) {
         File(lettersDir, "${date.format(DATE_FMT)}.md").delete()
     }
 
+    private fun transcribedMarker(date: LocalDate) = File(recordingsDir(date), ".transcribed")
+
+    /** Saved speech segments of [date] that have not been transcribed yet, oldest first. */
+    suspend fun pendingRecordings(date: LocalDate): List<File> = withContext(Dispatchers.IO) {
+        val m = transcribedMarker(date)
+        val done = if (m.exists()) m.readLines().toSet() else emptySet()
+        listRecordingFiles(date).filter { it.name !in done }
+    }
+
+    suspend fun markTranscribed(date: LocalDate, file: File) = withContext(Dispatchers.IO) {
+        transcribedMarker(date).appendText(file.name + "\n")
+    }
+
+    /** Today's saved speech segments, oldest first. */
+    suspend fun listRecordingFiles(date: LocalDate): List<File> = withContext(Dispatchers.IO) {
+        recordingsDir(date).listFiles().orEmpty().filter { it.extension in AUDIO_EXT }.sortedBy { it.name }
+    }
+
     companion object {
+        private val AUDIO_EXT = setOf("aac", "m4a")
         private val DATE_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
-        private val TIME_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+        private val TIME_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
     }
 }
 

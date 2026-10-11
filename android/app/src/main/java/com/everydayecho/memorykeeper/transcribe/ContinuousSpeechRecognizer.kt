@@ -31,6 +31,9 @@ class ContinuousSpeechRecognizer(
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var running = false
     @Volatile private var restarting = false
+    // On-device recognizers often lack the zh-CN pack (esp. Samsung); fall back
+    // to the system's standard recognizer instead of failing silently forever.
+    private var useOnDevice = Build.VERSION.SDK_INT >= 31
 
     fun start() {
         if (running) return
@@ -56,11 +59,14 @@ class ContinuousSpeechRecognizer(
         if (!running) return
         // Recreate the recognizer each session — some OEMs leak listeners otherwise.
         recognizer?.destroy()
-        val r = if (Build.VERSION.SDK_INT >= 31) {
+        val r = if (useOnDevice && Build.VERSION.SDK_INT >= 31 &&
+            SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+        ) {
             SpeechRecognizer.createOnDeviceSpeechRecognizer(context).also {
                 Log.d(TAG, "Using on-device recognizer")
             }
         } else {
+            useOnDevice = false
             SpeechRecognizer.createSpeechRecognizer(context)
         }
         recognizer = r
@@ -69,7 +75,7 @@ class ContinuousSpeechRecognizer(
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, useOnDevice)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
         }
 
@@ -88,7 +94,11 @@ class ContinuousSpeechRecognizer(
                     // Expected when there's silence — quietly restart.
                     scheduleRestart(150)
                 } else {
-                    onError(error, errorText(error))
+                    if (useOnDevice && error != SpeechRecognizer.ERROR_RECOGNIZER_BUSY) {
+                        // Language pack missing / service unusable on-device: switch to standard.
+                        useOnDevice = false
+                    }
+                    onError(error, errorText(error) + if (useOnDevice) "" else "（标准识别）")
                     scheduleRestart(2000)
                 }
             }
@@ -136,6 +146,8 @@ class ContinuousSpeechRecognizer(
         SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "recognizer busy"
         SpeechRecognizer.ERROR_SERVER -> "server error"
         SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "speech timeout"
+        12 -> "language not supported"
+        13 -> "language unavailable"
         else -> "code=$code"
     }
 

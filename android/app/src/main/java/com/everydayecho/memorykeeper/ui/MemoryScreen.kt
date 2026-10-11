@@ -40,7 +40,7 @@ import java.time.LocalDate
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MemoryScreen(onBack: () -> Unit) {
+fun MemoryScreen(onBack: () -> Unit, onOpenTranscripts: () -> Unit) {
     val app = MemoryKeeperApp.get()
     val scope = rememberCoroutineScope()
 
@@ -63,6 +63,7 @@ fun MemoryScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
+                    TextButton(onClick = onOpenTranscripts) { Text("原始转录") }
                     TextButton(onClick = {
                         editingText = memoryMd
                         editing = true

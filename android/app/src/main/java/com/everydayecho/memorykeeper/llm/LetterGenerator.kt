@@ -1,8 +1,11 @@
 package com.everydayecho.memorykeeper.llm
 
+import com.everydayecho.memorykeeper.MemoryKeeperApp
 import com.everydayecho.memorykeeper.data.FileRepository
 import com.everydayecho.memorykeeper.data.SecurePreferences
 import com.everydayecho.memorykeeper.data.UserProfile
+import com.everydayecho.memorykeeper.transcribe.ModelManager
+import com.everydayecho.memorykeeper.transcribe.Transcriber
 import java.time.LocalDate
 
 /**
@@ -19,6 +22,19 @@ class LetterGenerator(
 ) {
 
     suspend fun generateToday(date: LocalDate = LocalDate.now()): Result<String> {
+        val pending = repo.pendingRecordings(date).size
+        if (pending > 0) {
+            val ctx = MemoryKeeperApp.get()
+            if (!ModelManager.isReady(ctx)) {
+                return Result.failure(
+                    IllegalStateException(
+                        "今天有 $pending 段语音还没转成文字。请先到「设置 → 本地语音转文字」下载模型。",
+                    ),
+                )
+            }
+            Transcriber(ctx, repo).transcribePending(date).onFailure { return Result.failure(it) }
+        }
+
         val profile = repo.loadProfile()
         val soulRaw = repo.ensureSoul()
         val soul = fillSlots(soulRaw, profile)

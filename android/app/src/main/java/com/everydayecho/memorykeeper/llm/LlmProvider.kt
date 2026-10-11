@@ -1,7 +1,7 @@
 package com.everydayecho.memorykeeper.llm
 
 /**
- * Supported AI endpoints. Everything except [ANTHROPIC] speaks the
+ * Supported AI endpoints. Everything except [ANTHROPIC] and [GEMINI] speaks the
  * OpenAI-compatible `/chat/completions` protocol.
  */
 enum class LlmProvider(
@@ -16,6 +16,7 @@ enum class LlmProvider(
     DEEPSEEK("DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", "sk-..."),
     GLM("GLM (智谱)", "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus", "id.secret"),
     OPENROUTER("OpenRouter", "https://openrouter.ai/api/v1", "anthropic/claude-sonnet-4.5", "sk-or-..."),
+    GEMINI("Google Gemini", "https://generativelanguage.googleapis.com", "gemini-2.5-flash", "AIza..."),
     CUSTOM("自定义 (OpenAI 兼容)", "", "", "API key", editableBaseUrl = true);
 
     companion object {
@@ -43,5 +44,6 @@ interface LlmClient {
 
 fun LlmConfig.createClient(): LlmClient = when (provider) {
     LlmProvider.ANTHROPIC -> AnthropicClient(apiKey, model, baseUrl)
+    LlmProvider.GEMINI -> GeminiClient(apiKey, model, baseUrl)
     else -> OpenAiCompatClient(apiKey, model, baseUrl, provider)
 }

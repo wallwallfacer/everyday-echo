@@ -73,6 +73,7 @@ object RemoteAsr {
 
         val started = System.currentTimeMillis()
         AsrService.javaCrashFile(app).delete()
+        AsrService.memFile(app).delete()
         val intent = Intent(app, AsrService::class.java)
         // Foreground priority keeps the system from killing the recognizer for memory first. Not
         // allowed from the background on Android 12+; then it simply runs at bound-service priority.
@@ -110,12 +111,15 @@ object RemoteAsr {
                 parts += reasonName(info.reason)
                 info.description?.takeIf { it.isNotBlank() }?.let { parts += it }
                 if (info.pss > 0) parts += "转录进程内存约 ${info.pss / 1024} MB"
+                if (info.rss > 0) parts += "RSS ${info.rss / 1024} MB"
                 (context.getSystemService(ActivityManager::class.java)).let { m ->
                     val mi = ActivityManager.MemoryInfo().also { m.getMemoryInfo(it) }
                     parts += "手机可用内存约 ${mi.availMem / 1048576} / ${mi.totalMem / 1048576} MB"
                 }
             }
         }
+        val mem = AsrService.memFile(context)
+        if (mem.exists()) parts += "崩溃前：" + mem.readText()
         val java = AsrService.javaCrashFile(context)
         if (java.exists()) parts += java.readLines().firstOrNull().orEmpty()
         return parts.joinToString(" · ").ifBlank { "转录进程意外退出" }

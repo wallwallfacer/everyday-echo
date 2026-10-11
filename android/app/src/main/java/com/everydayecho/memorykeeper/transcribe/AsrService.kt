@@ -90,11 +90,39 @@ class AsrService : Service() {
         super.onDestroy()
     }
 
+    @Volatile private var stage = ""
+
+    private fun setStage(s: String) {
+        stage = s
+        writeMemLog()
+    }
+
+    /** Last known stage + memory of this process, so the app can tell what was happening if it gets killed. */
+    @Synchronized
+    private fun writeMemLog() {
+        runCatching {
+            val st = File("/proc/self/status").readLines()
+            fun kb(key: String) = st.firstOrNull { it.startsWith(key) }?.split(Regex("\\s+"))?.getOrNull(1)?.toLongOrNull() ?: 0L
+            memFile(this).writeText("$stage · 进程内存 ${kb("VmRSS:") / 1024} MB（峰值 ${kb("VmHWM:") / 1024} MB）")
+        }
+    }
+
     private fun run(paths: List<String>, reply: Messenger) {
         val current = currentFile(this)
+        val sampler = Thread {
+            try {
+                while (true) {
+                    writeMemLog()
+                    Thread.sleep(200)
+                }
+            } catch (_: InterruptedException) {
+            }
+        }.apply { isDaemon = true; start() }
         try {
             current.writeText("") // empty = crashed while loading the model
+            setStage("加载模型")
             val recognizer = newRecognizer(this)
+            setStage("模型已加载")
             try {
                 for (p in paths) {
                     current.writeText(p)
@@ -114,6 +142,8 @@ class AsrService : Service() {
             current.delete()
             runCatching { leaveForeground() }
             send(reply, MSG_ERROR) { putString(KEY_ERROR, e.message ?: e.toString()) }
+        } finally {
+            sampler.interrupt()
         }
     }
 
@@ -125,12 +155,17 @@ class AsrService : Service() {
 
     /** Returns recognized text, or null if the audio could not be decoded. */
     private fun recognize(recognizer: OfflineRecognizer, file: File): String? {
+        setStage("解码音频 ${file.name}（${file.length() / 1024} KB）")
         val pcm = runCatching { AacDecoder.decode(file) }.getOrNull() ?: return null
         if (pcm.samples.isEmpty()) return null
+        val audio = "%.1f 秒音频，%d Hz".format(pcm.samples.size.toFloat() / pcm.sampleRate, pcm.sampleRate)
+        setStage("送入音频（$audio）")
         val stream = recognizer.createStream()
         try {
             stream.acceptWaveform(pcm.samples, pcm.sampleRate)
+            setStage("识别中（$audio）")
             recognizer.decode(stream)
+            setStage("识别完成（$audio）")
             return recognizer.getResult(stream).text.trim()
         } finally {
             stream.release()
@@ -167,6 +202,9 @@ class AsrService : Service() {
 
         /** The file being recognized (empty while loading the model); left behind if the process dies. */
         fun currentFile(context: Context) = File(context.cacheDir, "asr_current")
+
+        /** Stage and memory of the ASR process, refreshed while it works. */
+        fun memFile(context: Context) = File(context.cacheDir, "asr_mem")
 
         /** Stack trace of a Java crash in the ASR process, if any. */
         fun javaCrashFile(context: Context) = File(context.cacheDir, "asr_java_crash.txt")

@@ -3,12 +3,14 @@ package com.everydayecho.memorykeeper.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -40,6 +42,8 @@ fun TranscriptionSection() {
     var pending by remember { mutableStateOf(0) }
     var working by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    var lastCrash by remember { mutableStateOf(Transcriber.lastCrash(ctx)) }
+    var confirmDelete by remember { mutableStateOf(false) }
 
     suspend fun refreshPending() {
         pending = app.repository.listRecordingDays().sumOf { app.repository.pendingRecordings(it.date).size }
@@ -122,12 +126,40 @@ fun TranscriptionSection() {
                         val r = Transcriber(ctx, app.repository).transcribePending { d, t -> message = "转录中 $d / $t" }
                         working = false
                         refreshPending()
-                        message = r.fold({ "已转录 $it 段" }, { "转录失败：${it.message}" })
+                        message = r.fold({ it.describe() }, { "转录失败：${it.message}" })
+                        lastCrash = Transcriber.lastCrash(ctx)
                     }
                 },
             ) { Text("立即转录待处理语音") }
+            OutlinedButton(
+                enabled = !working,
+                onClick = { confirmDelete = true },
+            ) { Text("删除模型（重新下载）") }
         }
         message?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+        lastCrash?.let {
+            Text(
+                "最近一次转录崩溃：$it",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("删除语音转文字模型？") },
+            text = { Text("删除后需要重新下载（约 160 MB）。已有的录音和转录不受影响。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    ModelManager.delete(ctx)
+                    ready = ModelManager.isReady(ctx)
+                    message = "模型已删除"
+                }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } },
+        )
     }
 }
 

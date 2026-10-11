@@ -3,118 +3,122 @@ package com.everydayecho.memorykeeper.transcribe
 import android.content.Context
 import com.everydayecho.memorykeeper.data.FileRepository
 import com.everydayecho.memorykeeper.data.TranscriptFragment
-import com.everydayecho.memorykeeper.record.AacDecoder
-import com.k2fsa.sherpa.onnx.OfflineModelConfig
-import com.k2fsa.sherpa.onnx.OfflineRecognizer
-import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
-import com.k2fsa.sherpa.onnx.OfflineSenseVoiceModelConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
-/** Batch, on-device transcription of saved speech segments into the daily transcript. */
+/** Result of a batch run: [failed] segments crashed the recognizer and are skipped from now on. */
+data class TranscribeOutcome(val done: Int, val failed: Int = 0, val crashReason: String? = null) {
+    fun describe() = buildString {
+        append("已转录 $done 段")
+        if (failed > 0) append("；$failed 段导致转录进程崩溃，已跳过（$crashReason）")
+    }
+}
+
+/**
+ * Batch, on-device transcription of saved speech segments into the daily transcript.
+ * Recognition itself runs in a separate process ([RemoteAsr]/[AsrService]), so a native
+ * crash only fails the transcription instead of closing the app.
+ */
 class Transcriber(private val context: Context, private val repo: FileRepository) {
 
-    /** Transcribes every untranscribed segment (all retained days). Returns how many were processed. */
+    /** Transcribes every untranscribed segment (all retained days, or only [onlyDate]). */
     suspend fun transcribePending(
         onlyDate: LocalDate? = null,
         onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
-    ): Result<Int> = withContext(Dispatchers.Default) {
+    ): Result<TranscribeOutcome> = withContext(Dispatchers.Default) {
         lock.withLock {
             runCatching {
                 check(ModelManager.isReady(context)) { "语音转文字模型还没下载" }
                 val days = repo.listRecordingDays().map { it.date }.filter { onlyDate == null || it == onlyDate }
                     .sorted()
                 val work = days.flatMap { d -> repo.pendingRecordings(d).map { d to it } }
-                if (work.isEmpty()) return@runCatching 0
-                val recognizer = newRecognizer()
-                try {
-                    var done = 0
-                    for ((date, file) in work) {
-                        val text = recognize(recognizer, file)
-                        if (!text.isNullOrBlank()) {
-                            repo.appendTranscript(
-                                date,
-                                TranscriptFragment(
-                                    timestamp = LocalDateTime.of(date, parseTime(file.nameWithoutExtension)),
-                                    text = text,
-                                    speaker = "self?",
-                                ),
-                            )
+                if (work.isEmpty()) return@runCatching TranscribeOutcome(0)
+                val dateOf = work.associate { it.second.absolutePath to it.first }
+                var done = 0
+                var failed = 0
+                var reason: String? = null
+                var remaining = work.map { it.second }
+                while (remaining.isNotEmpty()) {
+                    val finished = HashSet<String>()
+                    try {
+                        RemoteAsr.run(context, remaining) { file, text ->
+                            val date = dateOf.getValue(file.absolutePath)
+                            save(date, file, text)
+                            finished += file.absolutePath
+                            done++
+                            onProgress(done + failed, work.size)
                         }
-                        repo.markTranscribed(date, file)
-                        done++
-                        onProgress(done, work.size)
+                        remaining = emptyList()
+                    } catch (e: AsrCrashException) {
+                        val culprit = remaining.firstOrNull { it.absolutePath == e.culprit } ?: throw loadCrash(e)
+                        recordCrash(e.reason)
+                        repo.markFailed(dateOf.getValue(culprit.absolutePath), culprit)
+                        failed++
+                        reason = e.reason
+                        onProgress(done + failed, work.size)
+                        if (failed >= MAX_CRASHES) error("转录进程连续崩溃 $failed 次，已停止（${e.reason}）")
+                        remaining = remaining.filter { it.absolutePath !in finished && it != culprit }
                     }
-                    work.map { it.first }.distinct().forEach { repo.sortTranscript(it) }
-                    done
-                } finally {
-                    recognizer.release()
                 }
+                work.map { it.first }.distinct().forEach { repo.sortTranscript(it) }
+                TranscribeOutcome(done, failed, reason)
             }
         }
     }
 
     /** Transcribes a single segment on demand. Returns the recognized text (blank if nothing was recognized). */
-    suspend fun transcribeFile(date: LocalDate, file: java.io.File): Result<String> = withContext(Dispatchers.Default) {
+    suspend fun transcribeFile(date: LocalDate, file: File): Result<String> = withContext(Dispatchers.Default) {
         lock.withLock {
             runCatching {
                 check(ModelManager.isReady(context)) { "语音转文字模型还没下载" }
-                val recognizer = newRecognizer()
+                var result: String? = null
                 try {
-                    val text = recognize(recognizer, file) ?: error("无法解码这段录音")
-                    if (text.isNotBlank()) {
-                        repo.appendTranscript(
-                            date,
-                            TranscriptFragment(
-                                timestamp = LocalDateTime.of(date, parseTime(file.nameWithoutExtension)),
-                                text = text,
-                                speaker = "self?",
-                            ),
-                        )
-                        repo.sortTranscript(date)
-                    }
-                    repo.markTranscribed(date, file)
-                    text
-                } finally {
-                    recognizer.release()
+                    RemoteAsr.run(context, listOf(file)) { _, text -> result = text ?: error("无法解码这段录音") }
+                } catch (e: AsrCrashException) {
+                    if (e.culprit == null) throw loadCrash(e)
+                    recordCrash(e.reason)
+                    repo.markFailed(date, file)
+                    error("转录这段录音时转录进程崩溃（${e.reason}）")
                 }
+                val text = result.orEmpty()
+                save(date, file, text)
+                repo.sortTranscript(date)
+                text
             }
         }
     }
 
-    private fun newRecognizer() = OfflineRecognizer(
-        null,
-        OfflineRecognizerConfig(
-            modelConfig = OfflineModelConfig(
-                senseVoice = OfflineSenseVoiceModelConfig(
-                    model = ModelManager.modelFile(context).absolutePath,
-                    language = "",
-                    useInverseTextNormalization = true,
+    private suspend fun save(date: LocalDate, file: File, text: String?) {
+        if (!text.isNullOrBlank()) {
+            repo.appendTranscript(
+                date,
+                TranscriptFragment(
+                    timestamp = LocalDateTime.of(date, parseTime(file.nameWithoutExtension)),
+                    text = text,
+                    speaker = "self?",
                 ),
-                tokens = ModelManager.tokensFile(context).absolutePath,
-                numThreads = 2,
-                provider = "cpu",
-            ),
-        ),
-    )
+            )
+        }
+        repo.markTranscribed(date, file)
+    }
 
-    /** Returns recognized text, or null if the audio could not be decoded. */
-    private fun recognize(recognizer: OfflineRecognizer, file: java.io.File): String? {
-        val pcm = runCatching { AacDecoder.decode(file) }.getOrNull() ?: return null
-        if (pcm.samples.isEmpty()) return null
-        val stream = recognizer.createStream()
-        try {
-            stream.acceptWaveform(pcm.samples, pcm.sampleRate)
-            recognizer.decode(stream)
-            return recognizer.getResult(stream).text.trim()
-        } finally {
-            stream.release()
+    private fun loadCrash(e: AsrCrashException): Exception {
+        recordCrash("加载模型时：" + e.reason)
+        return IllegalStateException(
+            "转录进程在加载模型时崩溃（${e.reason}）。模型文件可能损坏，可在「设置 → 本地语音转文字」删除模型后重新下载。",
+        )
+    }
+
+    private fun recordCrash(reason: String) {
+        runCatching {
+            lastCrashFile(context).writeText("${LocalDateTime.now().format(STAMP_FMT)}  $reason")
         }
     }
 
@@ -123,5 +127,13 @@ class Transcriber(private val context: Context, private val repo: FileRepository
 
     companion object {
         private val lock = Mutex()
+        private const val MAX_CRASHES = 3
+        private val STAMP_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("MM-dd HH:mm")
+
+        private fun lastCrashFile(context: Context) = File(context.filesDir, "asr_last_crash.txt")
+
+        /** The most recent crash of the transcription process, for display in Settings. */
+        fun lastCrash(context: Context): String? =
+            lastCrashFile(context).takeIf { it.exists() }?.readText()?.ifBlank { null }
     }
 }

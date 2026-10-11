@@ -21,6 +21,7 @@ class MemoryKeeperApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        if (isAsrProcess()) return // the recognizer process needs none of the app setup below
         repository = FileRepository(this)
         securePrefs = SecurePreferences(this)
         com.everydayecho.memorykeeper.transcribe.TranscribeWorker.schedule(this)
@@ -30,6 +31,17 @@ class MemoryKeeperApp : Application() {
             repository.pruneOldTranscripts()
             repository.pruneOldRecordings()
         }
+    }
+
+    private fun isAsrProcess(): Boolean {
+        val name = if (android.os.Build.VERSION.SDK_INT >= 28) {
+            android.app.Application.getProcessName()
+        } else {
+            val pid = android.os.Process.myPid()
+            getSystemService(android.app.ActivityManager::class.java).runningAppProcesses
+                ?.firstOrNull { it.pid == pid }?.processName
+        }
+        return name?.endsWith(":asr") == true
     }
 
     companion object {

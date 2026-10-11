@@ -54,7 +54,13 @@ import java.time.LocalDate
 
 private data class DaySummary(val date: LocalDate, val segments: Int, val pending: Int, val hasTranscript: Boolean)
 
-private data class Segment(val file: File, val time: String, val text: String?, val transcribed: Boolean)
+private data class Segment(
+    val file: File,
+    val time: String,
+    val text: String?,
+    val transcribed: Boolean,
+    val failed: Boolean,
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -183,10 +189,11 @@ private fun DayView(date: LocalDate, onBack: () -> Unit) {
         val files = app.repository.listRecordingFiles(date)
         val map = app.repository.segmentTranscripts(date)
         val done = app.repository.transcribedNames(date)
+        val failed = app.repository.failedNames(date)
         segments = files.map { f ->
             val key = f.nameWithoutExtension
             val t = if (key.length == 6) "${key.substring(0, 2)}:${key.substring(2, 4)}:${key.substring(4)}" else key
-            Segment(f, t, map[key], f.name in done)
+            Segment(f, t, map[key], f.name in done, f.name in failed)
         }
         full = app.repository.readTranscript(date)
     }
@@ -228,7 +235,7 @@ private fun DayView(date: LocalDate, onBack: () -> Unit) {
                                     val r = Transcriber(ctx, app.repository)
                                         .transcribePending(date) { d, t -> batchStatus = "转录中 $d / $t" }
                                     batchStatus = null
-                                    message = r.fold({ "已转录 $it 段" }, { "转录失败：${it.message}" })
+                                    message = r.fold({ it.describe() }, { "转录失败：${it.message}" })
                                     load()
                                 }
                             },
@@ -283,6 +290,7 @@ private fun DayView(date: LocalDate, onBack: () -> Unit) {
                         when {
                             seg.text != null -> SelectionContainer { Text(seg.text, style = MaterialTheme.typography.bodyMedium) }
                             seg.transcribed -> Text("（没有识别出文字）", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
+                            seg.failed -> Text("（转录时出错，已跳过；可点「转录」重试）", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
                             else -> Text("（未转录）", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
                         }
                     }

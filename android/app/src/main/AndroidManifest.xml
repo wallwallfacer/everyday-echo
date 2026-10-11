@@ -54,6 +54,12 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
+        <!-- Native speech recognition runs in its own process so a crash there can't close the app. -->
+        <service
+            android:name=".transcribe.AsrService"
+            android:exported="false"
+            android:process=":asr" />
+
     </application>
 
 </manifest>

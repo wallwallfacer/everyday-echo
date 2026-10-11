@@ -21,6 +21,9 @@ import com.k2fsa.sherpa.onnx.OfflineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
 import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OfflineSenseVoiceModelConfig
+import com.k2fsa.sherpa.onnx.SileroVadModelConfig
+import com.k2fsa.sherpa.onnx.Vad
+import com.k2fsa.sherpa.onnx.VadModelConfig
 import java.io.File
 import java.util.concurrent.Executors
 
@@ -158,17 +161,84 @@ class AsrService : Service() {
         setStage("解码音频 ${file.name}（${file.length() / 1024} KB）")
         val pcm = runCatching { AacDecoder.decode(file) }.getOrNull() ?: return null
         if (pcm.samples.isEmpty()) return null
-        val audio = "%.1f 秒音频，%d Hz".format(pcm.samples.size.toFloat() / pcm.sampleRate, pcm.sampleRate)
-        setStage("送入音频（$audio）")
+        val samples = toRate(pcm.samples, pcm.sampleRate, RATE)
+        val seconds = samples.size.toFloat() / RATE
+        if (seconds <= MAX_PIECE_SEC) return recognizePiece(recognizer, samples, "%.1f 秒音频".format(seconds))
+        // SenseVoice's memory grows ~quadratically with input length (a 10-minute file needs
+        // ~5 GB), so long audio (e.g. recordings from before VAD filtering) is cut into speech
+        // pieces first; silence in between is dropped.
+        setStage("切分长音频（%.1f 秒）".format(seconds))
+        val pieces = speechPieces(samples)
+        return pieces.mapIndexed { i, p ->
+            recognizePiece(recognizer, p, "%.1f 秒音频的第 %d/%d 段".format(seconds, i + 1, pieces.size))
+        }.filter { it.isNotBlank() }.joinToString(" ")
+    }
+
+    private fun recognizePiece(recognizer: OfflineRecognizer, samples: FloatArray, label: String): String {
         val stream = recognizer.createStream()
         try {
-            stream.acceptWaveform(pcm.samples, pcm.sampleRate)
-            setStage("识别中（$audio）")
+            stream.acceptWaveform(samples, RATE)
+            setStage("识别中（$label）")
             recognizer.decode(stream)
-            setStage("识别完成（$audio）")
             return recognizer.getResult(stream).text.trim()
         } finally {
             stream.release()
+        }
+    }
+
+    /** Speech pieces of at most [MAX_PIECE_SEC] seconds, found with the Silero VAD bundled in assets. */
+    private fun speechPieces(samples: FloatArray): List<FloatArray> {
+        val vad = Vad(
+            assets,
+            VadModelConfig(
+                sileroVadModelConfig = SileroVadModelConfig(
+                    model = "silero_vad.onnx",
+                    threshold = 0.5f,
+                    minSilenceDuration = 0.8f,
+                    minSpeechDuration = 0.3f,
+                    windowSize = VAD_WINDOW,
+                    maxSpeechDuration = 20f,
+                ),
+                sampleRate = RATE,
+                numThreads = 1,
+            ),
+        )
+        val out = mutableListOf<FloatArray>()
+        try {
+            fun drain() {
+                while (!vad.empty()) {
+                    out += vad.front().samples
+                    vad.pop()
+                }
+            }
+            var i = 0
+            while (i < samples.size) {
+                val end = minOf(i + VAD_WINDOW, samples.size)
+                vad.acceptWaveform(samples.copyOfRange(i, end))
+                drain()
+                i = end
+            }
+            vad.flush()
+            drain()
+        } finally {
+            vad.release()
+        }
+        // Safety net: never hand the recognizer more than MAX_PIECE_SEC at once.
+        val max = MAX_PIECE_SEC * RATE
+        return out.flatMap { p -> (p.indices step max).map { p.copyOfRange(it, minOf(it + max, p.size)) } }
+    }
+
+    /** Linear resampling to [to] Hz (the VAD needs 16 kHz); a no-op when the rate already matches. */
+    private fun toRate(x: FloatArray, from: Int, to: Int): FloatArray {
+        if (from == to || from <= 0) return x
+        val n = (x.size.toLong() * to / from).toInt()
+        return FloatArray(n) { i ->
+            val pos = i.toDouble() * from / to
+            val j = pos.toInt()
+            val f = (pos - j).toFloat()
+            val a = x[minOf(j, x.size - 1)]
+            val b = x[minOf(j + 1, x.size - 1)]
+            a + (b - a) * f
         }
     }
 
@@ -189,6 +259,9 @@ class AsrService : Service() {
     )
 
     companion object {
+        private const val RATE = 16000
+        private const val MAX_PIECE_SEC = 30
+        private const val VAD_WINDOW = 512
         private const val CHANNEL_ID = "asr"
         private const val NOTIF_ID = 2002
         const val MSG_RUN = 1

@@ -193,6 +193,31 @@ class FileRepository(private val context: Context) {
         }
     }
 
+    /** Segment transcripts of [date], keyed by the segment file stem (HHmmss). Only lines with seconds match. */
+    suspend fun segmentTranscripts(date: LocalDate): Map<String, String> = withContext(Dispatchers.IO) {
+        val file = File(transcriptsDir, "${date.format(DATE_FMT)}.md")
+        if (!file.exists()) return@withContext emptyMap()
+        val re = Regex("""^- \[(\d\d):(\d\d):(\d\d)] \([^)]*\) (.*)$""")
+        file.readLines().mapNotNull { line ->
+            re.find(line)?.let { m -> (m.groupValues[1] + m.groupValues[2] + m.groupValues[3]) to m.groupValues[4] }
+        }.toMap()
+    }
+
+    suspend fun transcribedNames(date: LocalDate): Set<String> = withContext(Dispatchers.IO) {
+        val m = transcribedMarker(date)
+        if (m.exists()) m.readLines().toSet() else emptySet()
+    }
+
+    /** Keeps a day's transcript in time order after out-of-order (manual) transcription. */
+    suspend fun sortTranscript(date: LocalDate) = withContext(Dispatchers.IO) {
+        val file = File(transcriptsDir, "${date.format(DATE_FMT)}.md")
+        if (!file.exists()) return@withContext
+        val lines = file.readLines()
+        val (entries, header) = lines.partition { it.startsWith("- [") }
+        val sorted = entries.sortedBy { it.substringAfter("[").substringBefore("]") }
+        file.writeText((header.joinToString("\n").trimEnd() + "\n\n" + sorted.joinToString("\n") + "\n"))
+    }
+
     suspend fun pruneOldTranscripts(retentionDays: Int = 7) = withContext(Dispatchers.IO) {
         val cutoff = LocalDate.now().minusDays(retentionDays.toLong())
         transcriptsDir.listFiles()?.forEach { f ->
@@ -253,7 +278,7 @@ class FileRepository(private val context: Context) {
     companion object {
         private val AUDIO_EXT = setOf("aac", "m4a")
         private val DATE_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
-        private val TIME_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+        private val TIME_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
     }
 }
 

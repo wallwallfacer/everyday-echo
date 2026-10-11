@@ -32,54 +32,89 @@ class Transcriber(private val context: Context, private val repo: FileRepository
                     .sorted()
                 val work = days.flatMap { d -> repo.pendingRecordings(d).map { d to it } }
                 if (work.isEmpty()) return@runCatching 0
-                val recognizer = OfflineRecognizer(
-                    null,
-                    OfflineRecognizerConfig(
-                        modelConfig = OfflineModelConfig(
-                            senseVoice = OfflineSenseVoiceModelConfig(
-                                model = ModelManager.modelFile(context).absolutePath,
-                                language = "",
-                                useInverseTextNormalization = true,
-                            ),
-                            tokens = ModelManager.tokensFile(context).absolutePath,
-                            numThreads = 2,
-                            provider = "cpu",
-                        ),
-                    ),
-                )
+                val recognizer = newRecognizer()
                 try {
                     var done = 0
                     for ((date, file) in work) {
-                        val pcm = runCatching { AacDecoder.decode(file) }.getOrNull()
-                        if (pcm != null && pcm.samples.isNotEmpty()) {
-                            val stream = recognizer.createStream()
-                            try {
-                                stream.acceptWaveform(pcm.samples, pcm.sampleRate)
-                                recognizer.decode(stream)
-                                val text = recognizer.getResult(stream).text.trim()
-                                if (text.isNotBlank()) {
-                                    repo.appendTranscript(
-                                        date,
-                                        TranscriptFragment(
-                                            timestamp = LocalDateTime.of(date, parseTime(file.nameWithoutExtension)),
-                                            text = text,
-                                            speaker = "self?",
-                                        ),
-                                    )
-                                }
-                            } finally {
-                                stream.release()
-                            }
+                        val text = recognize(recognizer, file)
+                        if (!text.isNullOrBlank()) {
+                            repo.appendTranscript(
+                                date,
+                                TranscriptFragment(
+                                    timestamp = LocalDateTime.of(date, parseTime(file.nameWithoutExtension)),
+                                    text = text,
+                                    speaker = "self?",
+                                ),
+                            )
                         }
                         repo.markTranscribed(date, file)
                         done++
                         onProgress(done, work.size)
                     }
+                    work.map { it.first }.distinct().forEach { repo.sortTranscript(it) }
                     done
                 } finally {
                     recognizer.release()
                 }
             }
+        }
+    }
+
+    /** Transcribes a single segment on demand. Returns the recognized text (blank if nothing was recognized). */
+    suspend fun transcribeFile(date: LocalDate, file: java.io.File): Result<String> = withContext(Dispatchers.Default) {
+        lock.withLock {
+            runCatching {
+                check(ModelManager.isReady(context)) { "语音转文字模型还没下载" }
+                val recognizer = newRecognizer()
+                try {
+                    val text = recognize(recognizer, file) ?: error("无法解码这段录音")
+                    if (text.isNotBlank()) {
+                        repo.appendTranscript(
+                            date,
+                            TranscriptFragment(
+                                timestamp = LocalDateTime.of(date, parseTime(file.nameWithoutExtension)),
+                                text = text,
+                                speaker = "self?",
+                            ),
+                        )
+                        repo.sortTranscript(date)
+                    }
+                    repo.markTranscribed(date, file)
+                    text
+                } finally {
+                    recognizer.release()
+                }
+            }
+        }
+    }
+
+    private fun newRecognizer() = OfflineRecognizer(
+        null,
+        OfflineRecognizerConfig(
+            modelConfig = OfflineModelConfig(
+                senseVoice = OfflineSenseVoiceModelConfig(
+                    model = ModelManager.modelFile(context).absolutePath,
+                    language = "",
+                    useInverseTextNormalization = true,
+                ),
+                tokens = ModelManager.tokensFile(context).absolutePath,
+                numThreads = 2,
+                provider = "cpu",
+            ),
+        ),
+    )
+
+    /** Returns recognized text, or null if the audio could not be decoded. */
+    private fun recognize(recognizer: OfflineRecognizer, file: java.io.File): String? {
+        val pcm = runCatching { AacDecoder.decode(file) }.getOrNull() ?: return null
+        if (pcm.samples.isEmpty()) return null
+        val stream = recognizer.createStream()
+        try {
+            stream.acceptWaveform(pcm.samples, pcm.sampleRate)
+            recognizer.decode(stream)
+            return recognizer.getResult(stream).text.trim()
+        } finally {
+            stream.release()
         }
     }
 

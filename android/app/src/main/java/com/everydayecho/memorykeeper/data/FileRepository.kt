@@ -258,12 +258,24 @@ class FileRepository(private val context: Context) {
     }
 
     private fun transcribedMarker(date: LocalDate) = File(recordingsDir(date), ".transcribed")
+    private fun failedMarker(date: LocalDate) = File(recordingsDir(date), ".failed")
 
     /** Saved speech segments of [date] that have not been transcribed yet, oldest first. */
     suspend fun pendingRecordings(date: LocalDate): List<File> = withContext(Dispatchers.IO) {
         val m = transcribedMarker(date)
         val done = if (m.exists()) m.readLines().toSet() else emptySet()
-        listRecordingFiles(date).filter { it.name !in done }
+        val failed = failedNames(date)
+        listRecordingFiles(date).filter { it.name !in done && it.name !in failed }
+    }
+
+    /** Segments that crashed the recognizer; batch runs skip them, manual transcription can retry. */
+    suspend fun failedNames(date: LocalDate): Set<String> = withContext(Dispatchers.IO) {
+        val m = failedMarker(date)
+        if (m.exists()) m.readLines().toSet() else emptySet()
+    }
+
+    suspend fun markFailed(date: LocalDate, file: File) = withContext(Dispatchers.IO) {
+        failedMarker(date).appendText(file.name + "\n")
     }
 
     suspend fun markTranscribed(date: LocalDate, file: File) = withContext(Dispatchers.IO) {

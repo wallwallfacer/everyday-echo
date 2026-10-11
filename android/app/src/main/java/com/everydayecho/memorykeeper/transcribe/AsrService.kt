@@ -1,14 +1,21 @@
 package com.everydayecho.memorykeeper.transcribe
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.Message
 import android.os.Messenger
+import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
+import com.everydayecho.memorykeeper.R
 import com.everydayecho.memorykeeper.record.AacDecoder
 import com.k2fsa.sherpa.onnx.OfflineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
@@ -48,6 +55,36 @@ class AsrService : Service() {
 
     override fun onBind(intent: Intent): IBinder = messenger.binder
 
+    /**
+     * Started (in addition to bound) by [RemoteAsr] so the process can run as a foreground
+     * service while it works: a plain bound background process is the first thing the
+     * system kills when memory is tight, and the recognizer needs ~400 MB.
+     */
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        runCatching {
+            val mgr = getSystemService(NotificationManager::class.java)
+            if (Build.VERSION.SDK_INT >= 26 && mgr.getNotificationChannel(CHANNEL_ID) == null) {
+                mgr.createNotificationChannel(NotificationChannel(CHANNEL_ID, "语音转文字", NotificationManager.IMPORTANCE_LOW))
+            }
+            val n = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_listening)
+                .setContentTitle("正在本地转录语音…")
+                .setOngoing(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .build()
+            ServiceCompat.startForeground(
+                this, NOTIF_ID, n,
+                if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
+            )
+        }.onFailure { stopSelf() } // stays alive through the binding, just at lower priority
+        return START_NOT_STICKY
+    }
+
+    private fun leaveForeground() {
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     override fun onDestroy() {
         worker.shutdown()
         super.onDestroy()
@@ -71,9 +108,11 @@ class AsrService : Service() {
                 recognizer.release()
             }
             current.delete()
+            leaveForeground()
             send(reply, MSG_DONE) {}
         } catch (e: Throwable) {
             current.delete()
+            runCatching { leaveForeground() }
             send(reply, MSG_ERROR) { putString(KEY_ERROR, e.message ?: e.toString()) }
         }
     }
@@ -115,6 +154,8 @@ class AsrService : Service() {
     )
 
     companion object {
+        private const val CHANNEL_ID = "asr"
+        private const val NOTIF_ID = 2002
         const val MSG_RUN = 1
         const val MSG_RESULT = 2
         const val MSG_DONE = 3

@@ -13,6 +13,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.Message
 import android.os.Messenger
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import java.io.File
@@ -72,7 +73,11 @@ object RemoteAsr {
 
         val started = System.currentTimeMillis()
         AsrService.javaCrashFile(app).delete()
-        check(app.bindService(Intent(app, AsrService::class.java), conn, Context.BIND_AUTO_CREATE)) { "无法启动转录进程" }
+        val intent = Intent(app, AsrService::class.java)
+        // Foreground priority keeps the system from killing the recognizer for memory first. Not
+        // allowed from the background on Android 12+; then it simply runs at bound-service priority.
+        runCatching { ContextCompat.startForegroundService(app, intent) }
+        check(app.bindService(intent, conn, Context.BIND_AUTO_CREATE or Context.BIND_IMPORTANT)) { "无法启动转录进程" }
         val byPath = files.associateBy { it.absolutePath }
         try {
             for (ev in events) {
@@ -104,7 +109,11 @@ object RemoteAsr {
             if (info != null) {
                 parts += reasonName(info.reason)
                 info.description?.takeIf { it.isNotBlank() }?.let { parts += it }
-                if (info.pss > 0) parts += "内存占用约 ${info.pss / 1024} MB"
+                if (info.pss > 0) parts += "转录进程内存约 ${info.pss / 1024} MB"
+                (context.getSystemService(ActivityManager::class.java)).let { m ->
+                    val mi = ActivityManager.MemoryInfo().also { m.getMemoryInfo(it) }
+                    parts += "手机可用内存约 ${mi.availMem / 1048576} / ${mi.totalMem / 1048576} MB"
+                }
             }
         }
         val java = AsrService.javaCrashFile(context)
